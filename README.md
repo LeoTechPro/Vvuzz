@@ -5,6 +5,7 @@
 ## Состав
 
 - `import_zip_to_sqlite.py` - импортирует `../2025-07-24 13-40-58.zip` в SQLite.
+- `import_zip_to_norm_sqlite.py` - импортирует zip сразу в нормализованную SQLite без промежуточной денормализованной БД.
 - `app.py` - локальный web-интерфейс с простой авторизацией.
 - `gosuslugi_parser.py` - безопасный parser scaffold для fixture/dry-run/live-probe; live/default путь пишет сразу в SQLite.
 - `normalize_sqlite.py` - строит нормализованную SQLite без дублей `applicant_id`/вузов/программ и с compatibility views для текущего UI.
