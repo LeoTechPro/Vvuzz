@@ -1,0 +1,57 @@
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Large local source/data artifacts
+*.zip
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.xlsx
+*.xls
+*.csv
+*.parquet
+*.duckdb
+
+# Runtime/debug output
+*.log
+raw/
+logs/
+tmp/
+temp/
+
+# Local parser/import sandboxes
+parser_sandbox.*
+smoke.*
+server.*.log
+*.bak
+*.tmp
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local IDE metadata
+.idea/
+.vscode/
