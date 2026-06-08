@@ -25,6 +25,7 @@ ENV/
 *.avi
 *.sqlite
 *.sqlite-*
+*.sqlite-journal
 *.db
 *.db-*
 *.xlsx

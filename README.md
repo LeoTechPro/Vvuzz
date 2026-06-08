@@ -7,6 +7,7 @@
 - `import_zip_to_sqlite.py` - импортирует `../2025-07-24 13-40-58.zip` в SQLite.
 - `app.py` - локальный web-интерфейс с простой авторизацией.
 - `gosuslugi_parser.py` - безопасный parser scaffold для fixture/dry-run/live-probe; live/default путь пишет сразу в SQLite.
+- `normalize_sqlite.py` - строит нормализованную SQLite без дублей `applicant_id`/вузов/программ и с compatibility views для текущего UI.
 - `vuzonline_2025_full.sqlite` - основная проверенная БД полного архива.
 - `vuzonline_2025.sqlite` - старый поврежденный артефакт первого импорта напрямую в DriveFS; не использовать.
 
@@ -75,3 +76,20 @@ Production-правило: парсер не создает промежуточ
 - пример ID для тестов: `4150096`
 
 Важно: первый полный импорт напрямую в Google Drive/DriveFS дал поврежденный SQLite-файл. Для больших повторных импортов безопаснее собирать БД на локальном диске, проверять `integrity_check`, затем копировать готовый файл в проект.
+
+## Нормализованная БД
+
+Собрать нормализованную копию:
+
+```powershell
+python .\normalize_sqlite.py --source .\vuzonline_2025_full.sqlite --target .\vuzonline_2025_norm.sqlite
+```
+
+Схема:
+
+- `applicants` - поступающие, один ряд на `applicant_id`;
+- `universities` - вузы;
+- `programs` - направления/программы;
+- `competitions_core` - конкурсы;
+- `applications` - связь поступающий/конкурс и конкурсные данные по этой связи;
+- `competitions` и `entries` - compatibility views для текущего интерфейса.
