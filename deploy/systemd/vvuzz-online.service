@@ -1,0 +1,17 @@
+[Unit]
+Description=Vvuzz Online local admissions analyzer
+After=network.target
+
+[Service]
+Type=simple
+User=agents
+Group=intdata
+WorkingDirectory=/int/vvuzz
+Environment=PYTHONUNBUFFERED=1
+Environment=VVUZZ_DB_PATH=/int/vvuzz/vuzonline_2025_norm.vds.sqlite
+ExecStart=/usr/bin/python3 /int/vvuzz/app.py --host 127.0.0.1 --port 9176
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
