@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import html
+import os
 import json
 import secrets
 import sqlite3
@@ -10,7 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 
-DB_PATH = Path(__file__).resolve().parent / "vuzonline_2025_norm.sqlite"
+DB_PATH = Path(os.getenv("VVUZZ_DB_PATH", Path(__file__).resolve().parent / "vuzonline_2025_norm.sqlite"))
 SESSIONS = {}
 
 
