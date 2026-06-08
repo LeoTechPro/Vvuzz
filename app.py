@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 
-DB_PATH = Path(__file__).resolve().parent / "vuzonline_2025_full.sqlite"
+DB_PATH = Path(__file__).resolve().parent / "vuzonline_2025_norm.sqlite"
 SESSIONS = {}
 
 
