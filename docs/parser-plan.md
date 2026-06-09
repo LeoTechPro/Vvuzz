@@ -15,6 +15,14 @@
 
 Production-правило: парсер не создает промежуточные `.xlsx`. Live-данные пишутся сразу в SQLite. Экспорт в `.xlsx` возможен только отдельной будущей командой из SQLite, если он понадобится.
 
+Live-парсер обязан поддерживать три режима:
+
+- `raw-only` - только локальный raw-архив на ПК;
+- `norm-only` - только нормализованные цели: локальная SQLite и/или VDS ingest API;
+- `both` - raw локально плюс нормализованные цели.
+
+Raw на VDS не пишется. Удаленная SQLite на VDS пополняется через `POST /api/ingest/batch`, а не прямой записью в sqlite-файл по сети.
+
 ## Ограничения из переписки
 
 - Исторически было около `143000` запросов.
@@ -48,13 +56,15 @@ Production-правило: парсер не создает промежуточ
    - результат каждого fetch/import;
    - статус, bytes, sha256, ошибка, опциональный путь к debug raw-файлу.
 
-4. `parser_raw_responses`
-   - сырые HTTP payload внутри SQLite;
-   - используется для probe/live-ответов, чтобы не плодить промежуточные файлы.
+4. Live raw archive
+   - `raw/<run_id>/manifest.jsonl`;
+   - `raw/<run_id>/errors.jsonl`;
+   - `raw/<run_id>/payloads/<sha-prefix>/<sha256>.bin.gz`;
+   - используется для `raw-only` и `both`.
 
-5. `raw/gosuslugi`
-   - только опциональный debug-дамп при явном `--save-raw-file`;
-   - по умолчанию не используется.
+5. `parser_raw_responses`
+   - legacy/probe storage внутри SQLite;
+   - не является production-raw для VDS.
 
 ## Команды
 
@@ -86,6 +96,22 @@ python .\gosuslugi_parser.py http-probe "https://www.gosuslugi.ru/" --dry-run
 
 ```powershell
 python .\gosuslugi_parser.py http-probe "https://www.gosuslugi.ru/" --rpm 55
+```
+
+Live crawl dry-run:
+
+```powershell
+python .\gosuslugi_parser.py live-crawl --mode raw-only --raw-dir I:\VvuzzRaw --url "https://www.gosuslugi.ru/" --dry-run
+```
+
+Live crawl с локальным raw и удаленным ingest:
+
+```powershell
+python .\gosuslugi_parser.py live-crawl --mode both `
+  --raw-dir I:\VvuzzRaw `
+  --target ingest+https://vvuzz.intdata.pro/api/ingest/batch `
+  --ingest-token <token> `
+  --url "https://actual-gosuslugi-endpoint"
 ```
 
 ## Что еще нужно сделать после появления данных

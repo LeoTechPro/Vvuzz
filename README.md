@@ -7,6 +7,7 @@
 - `import_zip_to_sqlite.py` - импортирует `../2025-07-24 13-40-58.zip` в SQLite.
 - `import_zip_to_norm_sqlite.py` - импортирует zip сразу в нормализованную SQLite без промежуточной денормализованной БД.
 - `app.py` - локальный web-интерфейс с простой авторизацией.
+- `chance.py` - helper формулы шанса поступления.
 - `gosuslugi_parser.py` - безопасный parser scaffold для fixture/dry-run/live-probe; live/default путь пишет сразу в SQLite.
 - `normalize_sqlite.py` - строит нормализованную SQLite без дублей `applicant_id`/вузов/программ и с compatibility views для текущего UI.
 - `vuzonline_2025_norm.sqlite` - основная нормализованная БД полного архива для интерфейса.
@@ -33,17 +34,23 @@ python .\app.py --host 127.0.0.1 --port 8765
 
 Открыть: <http://127.0.0.1:8765>
 
-Логин по умолчанию: `admin`  
+Логин по умолчанию: `prointdata@ya.ru`
 Пароль по умолчанию: `admin`
 
 Пользователи хранятся в таблице `users`:
 
 ```sql
-INSERT INTO users(username, password_text, created_at)
-VALUES ('demo', 'demo', datetime('now'));
+INSERT INTO users(username, password_text, role, applicant_id, is_active, created_at, updated_at)
+VALUES ('demo', 'demo', 'manager', NULL, 1, datetime('now'), datetime('now'));
 ```
 
 Пароль намеренно хранится обычным текстом: это локальный интерфейс для публичных данных.
+
+Основные маршруты:
+
+- `/public` - публичный поиск по ID без логина.
+- `/universities`, `/competitions`, `/applicants` - закрытые таблицы для `admin`/`manager`.
+- `/admin/users` - управление пользователями для `admin`.
 
 ## Parser scaffold
 
@@ -61,9 +68,19 @@ python .\gosuslugi_parser.py fixture-run --db .\parser_sandbox.sqlite --limit 20
 python .\gosuslugi_parser.py http-probe "https://www.gosuslugi.ru/" --db .\parser_sandbox.sqlite --dry-run
 ```
 
-Live probe по умолчанию ограничен `55` запросами в минуту, но массовый обход Госуслуг до появления списков не запускать.
+Live probe/crawl по умолчанию ограничен `55` запросами в минуту, но массовый обход Госуслуг до появления списков не запускать.
 
-Production-правило: парсер не создает промежуточные `.xlsx`. Live/probe payload хранится в SQLite в `parser_raw_responses`, нормализованные данные должны попадать в `competitions`/`entries`. `.xlsx` здесь используется только как исторический fixture-источник архива 2025.
+Production-правило: парсер не создает промежуточные `.xlsx`. Live parser имеет режимы `raw-only`, `norm-only`, `both`. Raw хранится локально в `manifest.jsonl + payloads/*.bin.gz`, на VDS raw не пишется. Удаленная SQLite на VDS пополняется только через `POST /api/ingest/batch`.
+
+Пример:
+
+```powershell
+python .\gosuslugi_parser.py live-crawl --mode both `
+  --raw-dir I:\VvuzzRaw `
+  --target ingest+https://vvuzz.intdata.pro/api/ingest/batch `
+  --ingest-token <token> `
+  --url "https://actual-gosuslugi-endpoint"
+```
 
 ## Текущая полная БД
 

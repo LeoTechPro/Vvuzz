@@ -1,12 +1,15 @@
 #!/usr/bin/env python
 import argparse
 import datetime as dt
+import gzip
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -19,6 +22,7 @@ DEFAULT_DB = PROJECT_DIR / "vuzonline_2025_full.sqlite"
 DEFAULT_SANDBOX_DB = PROJECT_DIR / "parser_sandbox.sqlite"
 RAW_DIR = PROJECT_DIR / "raw" / "gosuslugi"
 DEFAULT_RPM = 55
+DEFAULT_BACKOFF_SECONDS = 3 * 60 * 60
 
 
 PARSER_SCHEMA = """
@@ -107,6 +111,11 @@ def finish_run(conn: sqlite3.Connection, run_id: int, status: str, notes: str = 
 
 def sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def is_block_payload(payload: bytes, content_type: str | None = None) -> bool:
+    text = payload[:20000].decode("utf-8", "ignore").lower()
+    return any(marker in text for marker in ("captcha", "капча", "too many requests", "доступ ограничен", "blocked"))
 
 
 class RateLimiter:
@@ -362,6 +371,286 @@ def command_http_probe(args) -> int:
             raise
 
 
+class RawArchive:
+    def __init__(self, root: Path, run_id: str):
+        self.root = root / run_id
+        self.payloads = self.root / "payloads"
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.payloads.mkdir(parents=True, exist_ok=True)
+        self.manifest = self.root / "manifest.jsonl"
+        self.errors = self.root / "errors.jsonl"
+
+    def write_payload(self, record: dict, payload: bytes) -> Path:
+        digest = record["sha256"]
+        target_dir = self.payloads / digest[:2]
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f"{digest}.bin.gz"
+        if not target.exists():
+            with gzip.open(target, "wb") as handle:
+                handle.write(payload)
+        record = dict(record)
+        record["payload_path"] = str(target)
+        with self.manifest.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return target
+
+    def write_error(self, record: dict) -> None:
+        with self.errors.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def read_urls(args) -> list[str]:
+    urls = list(args.url or [])
+    if args.url_file:
+        urls.extend(
+            line.strip()
+            for line in args.url_file.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+    if not urls:
+        raise SystemExit("live-crawl needs at least one --url or --url-file")
+    return urls
+
+
+def target_kind(target: str) -> tuple[str, str]:
+    if target.startswith("sqlite://"):
+        return "sqlite", target.removeprefix("sqlite://")
+    if target.startswith("ingest+"):
+        return "ingest", target.removeprefix("ingest+")
+    raise SystemExit(f"unsupported target: {target}")
+
+
+def extract_competitions(payload: bytes, content_type: str | None) -> list[dict]:
+    if content_type and "json" not in content_type.lower():
+        return []
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except Exception:
+        return []
+    if isinstance(data, dict) and isinstance(data.get("competitions"), list):
+        return data["competitions"]
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def ensure_norm_target(conn: sqlite3.Connection) -> None:
+    from normalize_sqlite import SCHEMA
+
+    conn.executescript(SCHEMA)
+    conn.commit()
+
+
+def norm_name_id(conn: sqlite3.Connection, table: str, value: str | None) -> int | None:
+    if not value:
+        return None
+    conn.execute(f"INSERT OR IGNORE INTO {table}(name) VALUES (?)", (value,))
+    row = conn.execute(f"SELECT id FROM {table} WHERE name = ?", (value,)).fetchone()
+    return row[0] if row else None
+
+
+def write_norm_sqlite(db_path: Path, competitions: list[dict], fetched_at: str) -> tuple[int, int]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    ensure_norm_target(conn)
+    comp_count = 0
+    app_count = 0
+    for comp in competitions:
+        source_path = comp.get("source_path")
+        if not source_path:
+            continue
+        program_id = norm_name_id(conn, "programs", comp.get("program"))
+        university_id = norm_name_id(conn, "universities", comp.get("university"))
+        existing = conn.execute("SELECT id FROM competitions_core WHERE source_path = ?", (source_path,)).fetchone()
+        path_json = json.dumps(comp.get("path") or [], ensure_ascii=False)
+        values = (
+            source_path,
+            comp.get("file_name") or Path(source_path).name,
+            program_id,
+            comp.get("education_level"),
+            comp.get("city"),
+            university_id,
+            comp.get("study_form"),
+            comp.get("quota_type"),
+            comp.get("seats"),
+            path_json,
+            len(comp.get("applications") or []),
+            fetched_at,
+        )
+        if existing:
+            competition_id = existing["id"]
+            conn.execute(
+                """
+                UPDATE competitions_core
+                SET file_name=?, program_id=?, education_level=?, city=?, university_id=?,
+                    study_form=?, quota_type=?, seats=?, path_json=?, row_count=?, imported_at=?
+                WHERE id=?
+                """,
+                values[1:] + (competition_id,),
+            )
+        else:
+            competition_id = conn.execute(
+                """
+                INSERT INTO competitions_core(
+                    source_path, file_name, program_id, education_level, city, university_id,
+                    study_form, quota_type, seats, path_json, row_count, imported_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            ).lastrowid
+            comp_count += 1
+        for app in comp.get("applications") or []:
+            external_id = str(app.get("applicant_id") or "").strip()
+            if not external_id:
+                continue
+            conn.execute("INSERT OR IGNORE INTO applicants(applicant_id) VALUES (?)", (external_id,))
+            applicant_id = conn.execute("SELECT id FROM applicants WHERE applicant_id = ?", (external_id,)).fetchone()["id"]
+            existing_app = conn.execute(
+                "SELECT id FROM applications WHERE competition_id = ? AND applicant_id = ? LIMIT 1",
+                (competition_id, applicant_id),
+            ).fetchone()
+            values_app = (
+                app.get("ordinal"),
+                app.get("competition_priority"),
+                app.get("consent_text"),
+                1 if app.get("has_consent") else 0,
+                app.get("score_total"),
+                app.get("exam_scores_text"),
+                app.get("individual_score"),
+                app.get("status"),
+                app.get("selected_at_moscow"),
+            )
+            if existing_app:
+                conn.execute(
+                    """
+                    UPDATE applications
+                    SET ordinal=?, competition_priority=?, consent_text=?, has_consent=?,
+                        score_total=?, exam_scores_text=?, individual_score=?, status=?, selected_at_moscow=?
+                    WHERE id=?
+                    """,
+                    values_app + (existing_app["id"],),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO applications(
+                        competition_id, applicant_id, ordinal, competition_priority, consent_text,
+                        has_consent, score_total, exam_scores_text, individual_score, status, selected_at_moscow
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (competition_id, applicant_id) + values_app,
+                )
+                app_count += 1
+    conn.commit()
+    conn.close()
+    return comp_count, app_count
+
+
+def post_ingest(target_url: str, token: str, batch: dict, timeout: int) -> dict:
+    payload = json.dumps(batch, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        target_url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Vvuzz-Ingest-Token": token,
+            "User-Agent": "VvuzzLiveParser/0.1",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def command_live_crawl(args) -> int:
+    urls = read_urls(args)
+    run_id = args.run_id or now_iso().replace(":", "-")
+    raw_archive = RawArchive(args.raw_dir, run_id) if args.mode in {"raw-only", "both"} else None
+    targets = [target_kind(target) for target in (args.target or [])]
+    if args.mode in {"norm-only", "both"} and not targets:
+        raise SystemExit(f"{args.mode} needs at least one --target")
+    if args.mode == "raw-only" and targets:
+        raise SystemExit("raw-only must not receive --target")
+    limiter = RateLimiter(args.rpm)
+    stopped = False
+    processed = 0
+    for url in urls:
+        limiter.wait()
+        fetched_at = now_iso()
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "VvuzzLiveParser/0.1 (+local research; rate-limited)",
+                "Accept": "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        )
+        try:
+            if args.dry_run:
+                print(f"dry-run: would GET {url} mode={args.mode} rpm={args.rpm}")
+                continue
+            with urllib.request.urlopen(request, timeout=args.timeout) as response:
+                payload = response.read()
+                digest = sha256_bytes(payload)
+                record = {
+                    "run_id": run_id,
+                    "url": url,
+                    "source_key": f"http:{url}",
+                    "status_code": response.status,
+                    "content_type": response.headers.get("Content-Type"),
+                    "bytes": len(payload),
+                    "sha256": digest,
+                    "fetched_at": fetched_at,
+                }
+                if response.status in {403, 429} or is_block_payload(payload, record["content_type"]):
+                    if raw_archive:
+                        raw_archive.write_error({**record, "error": "block/rate-limit/captcha detected"})
+                    print(f"stop: block signal from {url}; backoff={args.backoff_seconds}s", file=sys.stderr)
+                    stopped = True
+                    break
+                if raw_archive:
+                    raw_archive.write_payload(record, payload)
+                competitions = extract_competitions(payload, record["content_type"])
+                if args.mode in {"norm-only", "both"}:
+                    batch = {
+                        "run_id": run_id,
+                        "source": "gosuslugi",
+                        "source_key": record["source_key"],
+                        "payload_sha256": digest,
+                        "fetched_at": fetched_at,
+                        "competitions": competitions,
+                    }
+                    for kind, target in targets:
+                        if kind == "sqlite":
+                            comp_count, app_count = write_norm_sqlite(Path(target), competitions, fetched_at)
+                            print(f"sqlite target={target} competitions={comp_count} applications={app_count}")
+                        else:
+                            if not args.ingest_token:
+                                raise SystemExit("ingest target needs --ingest-token or VVUZZ_INGEST_TOKEN")
+                            result = post_ingest(target, args.ingest_token, batch, args.timeout)
+                            print(f"ingest target={target} result={result}")
+                processed += 1
+                print(f"GET {url} -> {response.status} bytes={len(payload)} sha256={digest[:12]}")
+        except urllib.error.HTTPError as exc:
+            record = {"run_id": run_id, "url": url, "status_code": exc.code, "error": str(exc), "fetched_at": fetched_at}
+            if raw_archive:
+                raw_archive.write_error(record)
+            print(f"GET {url} -> HTTP {exc.code}: {exc}", file=sys.stderr)
+            if exc.code in {403, 429}:
+                stopped = True
+                break
+        except Exception as exc:
+            record = {"run_id": run_id, "url": url, "error": str(exc), "fetched_at": fetched_at}
+            if raw_archive:
+                raw_archive.write_error(record)
+            raise
+    if stopped:
+        print(f"stopped processed={processed} suggested_backoff_seconds={args.backoff_seconds}")
+        return 2
+    print(f"live-crawl done processed={processed} run_id={run_id}")
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="Safe parser scaffold for Gosuslugi VUZ online data.")
     parser.set_defaults(func=None)
@@ -396,6 +685,20 @@ def build_parser():
         help="Debug only: also write raw HTTP response to raw/gosuslugi. Default stores raw payload only in SQLite.",
     )
     p_probe.set_defaults(func=command_http_probe)
+
+    p_live = sub.add_parser("live-crawl", help="Rate-limited live crawl with raw/norm/both output modes.")
+    p_live.add_argument("--mode", choices=["raw-only", "norm-only", "both"], required=True)
+    p_live.add_argument("--url", action="append", help="URL to fetch. Can be repeated.")
+    p_live.add_argument("--url-file", type=Path, help="Text file with one URL per line.")
+    p_live.add_argument("--raw-dir", type=Path, default=RAW_DIR)
+    p_live.add_argument("--target", action="append", help="sqlite://path or ingest+https://host/api/ingest/batch. Can be repeated.")
+    p_live.add_argument("--ingest-token", default=os.getenv("VVUZZ_INGEST_TOKEN", ""))
+    p_live.add_argument("--run-id")
+    p_live.add_argument("--rpm", type=int, default=DEFAULT_RPM)
+    p_live.add_argument("--timeout", type=int, default=20)
+    p_live.add_argument("--backoff-seconds", type=int, default=DEFAULT_BACKOFF_SECONDS)
+    p_live.add_argument("--dry-run", action="store_true")
+    p_live.set_defaults(func=command_live_crawl)
 
     return parser
 

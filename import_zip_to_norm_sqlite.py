@@ -105,9 +105,13 @@ def parse_competition_path(source_path: str) -> dict:
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     conn.execute(
-        "INSERT OR IGNORE INTO users(username, password_text, created_at) VALUES (?, ?, ?)",
-        ("admin", "admin", now_iso()),
+        """
+        INSERT OR IGNORE INTO users(username, password_text, role, applicant_id, is_active, created_at, updated_at)
+        VALUES (?, ?, 'admin', NULL, 1, ?, ?)
+        """,
+        ("prointdata@ya.ru", "admin", now_iso(), now_iso()),
     )
+    conn.execute("UPDATE users SET is_active = 0, updated_at = ? WHERE username = 'admin'", (now_iso(),))
     conn.commit()
 
 

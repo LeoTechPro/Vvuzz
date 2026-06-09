@@ -61,7 +61,11 @@ CREATE TABLE applications (
 CREATE TABLE users (
     username TEXT PRIMARY KEY,
     password_text TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    role TEXT NOT NULL DEFAULT 'manager',
+    applicant_id TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 
 CREATE TABLE import_meta (
@@ -159,7 +163,29 @@ def main() -> int:
     target.execute("ATTACH DATABASE ? AS src", (str(args.source),))
 
     log("copy users/import_meta")
-    target.execute("INSERT INTO users SELECT username, password_text, created_at FROM src.users")
+    source_user_cols = {row["name"] for row in target.execute("PRAGMA src.table_info(users)")}
+    if {"role", "applicant_id", "is_active", "updated_at"}.issubset(source_user_cols):
+        target.execute(
+            """
+            INSERT INTO users(username, password_text, role, applicant_id, is_active, created_at, updated_at)
+            SELECT username, password_text, role, applicant_id, is_active, created_at, updated_at FROM src.users
+            """
+        )
+    else:
+        target.execute(
+            """
+            INSERT INTO users(username, password_text, role, applicant_id, is_active, created_at, updated_at)
+            SELECT username, password_text, 'manager', NULL, 1, created_at, created_at FROM src.users
+            """
+        )
+    target.execute(
+        """
+        INSERT INTO users(username, password_text, role, applicant_id, is_active, created_at, updated_at)
+        VALUES ('prointdata@ya.ru', 'admin', 'admin', NULL, 1, datetime('now'), datetime('now'))
+        ON CONFLICT(username) DO UPDATE SET password_text='admin', role='admin', is_active=1, updated_at=datetime('now')
+        """
+    )
+    target.execute("UPDATE users SET is_active = 0, updated_at = datetime('now') WHERE username = 'admin'")
     target.execute("INSERT INTO import_meta SELECT key, value FROM src.import_meta")
     target.commit()
 
