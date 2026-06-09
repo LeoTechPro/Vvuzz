@@ -12,6 +12,8 @@ dist/
 *.egg-info/
 
 # Virtual environments
+.env
+.env.*
 .venv/
 venv/
 env/
