@@ -43,6 +43,11 @@ def esc(value) -> str:
     return html.escape("" if value is None else str(value))
 
 
+def like_prefix(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
+
+
 def role_title(role: str) -> str:
     return {"admin": "admin", "manager": "manager", "applicant": "поступающий"}.get(role, role)
 
@@ -74,11 +79,7 @@ def ensure_schema() -> None:
             """
             INSERT INTO users(username, password_text, role, applicant_id, is_active, created_at, updated_at)
             VALUES (?, ?, 'admin', NULL, 1, ?, ?)
-            ON CONFLICT(username) DO UPDATE SET
-                password_text = excluded.password_text,
-                role = 'admin',
-                is_active = 1,
-                updated_at = excluded.updated_at
+            ON CONFLICT(username) DO NOTHING
             """,
             ("prointdata@ya.ru", "admin", now_iso(), now_iso()),
         )
@@ -127,30 +128,114 @@ def page(title: str, body: str) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{esc(title)}</title>
   <style>
-    :root {{ color-scheme: light; --border: #d7dce2; --muted: #667085; --blue: #1f6feb; --bg: #f6f7f9; }}
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; color: #111827; background: var(--bg); }}
-    header {{ display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; background: #fff; border-bottom: 1px solid var(--border); }}
+    :root {{
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --surface-soft: #f8fafc;
+      --text: #111827;
+      --muted: #667085;
+      --border: #d7dce2;
+      --border-strong: #c5ccd6;
+      --blue: #1f6feb;
+      --blue-dark: #1557bd;
+      --green: #16794c;
+      --shadow: 0 18px 44px rgba(15, 23, 42, 0.08);
+    }}
+    body, header, main, section, div, form, table, th, td, input, select, button {{ box-sizing: border-box; }}
+    body {{ margin: 0; font: 1rem/1.5 system-ui, -apple-system, Segoe UI, sans-serif; color: var(--text); background: var(--bg); }}
+    header {{ display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; background: rgba(255, 255, 255, 0.92); border-bottom: 1px solid var(--border); }}
     main {{ max-width: 1280px; margin: 0 auto; padding: 20px; }}
-    h1 {{ font-size: 20px; margin: 0; }}
-    h2 {{ font-size: 16px; margin: 22px 0 10px; }}
+    h1 {{ font-size: 1.25rem; margin: 0; }}
+    h2 {{ font-size: 1.05rem; margin: 22px 0 10px; }}
+    h3 {{ font-size: 1rem; margin: 0 0 12px; }}
+    p {{ text-wrap: pretty; }}
     nav {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }}
     form {{ display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 16px; }}
-    input, select, button {{ font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: #fff; min-height: 36px; }}
-    button {{ cursor: pointer; background: var(--blue); border-color: var(--blue); color: #fff; }}
+    label {{ display: block; font-size: 0.84rem; font-weight: 650; color: #344054; margin-bottom: 6px; }}
+    input, select, button {{ font: inherit; padding: 9px 11px; border: 1px solid var(--border); border-radius: 7px; background: #fff; min-height: 40px; }}
+    input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible {{ outline: 3px solid rgba(31, 111, 235, 0.3); outline-offset: 2px; }}
+    button {{ cursor: pointer; background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 650; }}
+    button:hover {{ background: var(--blue-dark); border-color: var(--blue-dark); }}
     table {{ width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--border); }}
     th, td {{ padding: 7px 9px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }}
     th {{ background: #f0f2f5; font-weight: 600; position: sticky; top: 0; }}
     .muted {{ color: var(--muted); }}
     .panel {{ background: #fff; border: 1px solid var(--border); padding: 14px; border-radius: 8px; margin-bottom: 16px; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 16px; }}
-    .metric {{ background: #fff; border: 1px solid var(--border); padding: 12px; border-radius: 8px; }}
+    .metric {{ display: block; background: #fff; border: 1px solid var(--border); padding: 12px; border-radius: 8px; color: var(--text); min-height: 100px; }}
     .metric b {{ display: block; font-size: 18px; }}
+    .metric small {{ display: block; margin-top: 8px; color: var(--muted); }}
+    a.metric:hover {{ border-color: var(--blue); text-decoration: none; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08); }}
     .pill {{ display: inline-block; padding: 2px 7px; border-radius: 999px; background: #eef1f4; }}
+    .chance-details {{ margin-top: 6px; color: var(--muted); }}
+    .chance-details summary {{ cursor: pointer; color: var(--blue); font-size: 0.9rem; }}
+    .chance-details dl {{ display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; margin: 8px 0 0; }}
+    .chance-details dt {{ color: #344054; font-weight: 650; }}
+    .chance-details dd {{ margin: 0; }}
+    .chance-formula {{ display: block; margin-top: 8px; color: #344054; }}
     .danger {{ color: #b42318; }}
     a {{ color: var(--blue); text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
     code {{ background: #eef1f4; padding: 2px 4px; border-radius: 4px; }}
+    .home-shell {{ max-width: 1120px; }}
+    .home-hero {{
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+      gap: 28px;
+      align-items: center;
+      min-height: min(640px, calc(100dvh - 112px));
+      padding-block: 34px 22px;
+    }}
+    .hero-copy h2 {{ font-size: clamp(2rem, 1.45rem + 2vw, 3.35rem); line-height: 1.05; letter-spacing: 0; margin: 0 0 18px; text-wrap: balance; }}
+    .hero-copy p {{ max-width: 680px; margin: 0 0 20px; color: #475467; font-size: 1.08rem; }}
+    .hero-points {{ display: flex; gap: 10px; flex-wrap: wrap; margin-top: 24px; }}
+    .hero-points span {{ border: 1px solid var(--border); background: rgba(255, 255, 255, 0.72); border-radius: 999px; padding: 7px 11px; color: #344054; font-size: 0.92rem; }}
+    .start-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 18px; }}
+    .start-card form {{ display: grid; grid-template-columns: 1fr; gap: 12px; margin: 0; }}
+    .start-card input, .start-card button {{ width: 100%; min-height: 46px; }}
+    .start-card .form-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
+    .start-card button.secondary {{ background: var(--green); border-color: var(--green); }}
+    .form-section {{ padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); }}
+    .form-section + .form-section {{ margin-top: 12px; }}
+    .form-section p {{ margin: -4px 0 12px; color: var(--muted); font-size: 0.92rem; }}
+    .landing-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 8px 0 44px; }}
+    .landing-item {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }}
+    .landing-item b {{ display: block; margin-bottom: 6px; }}
+    .landing-item p {{ margin: 0; color: var(--muted); }}
+    .dashboard-hero {{ display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr); gap: 18px; align-items: stretch; margin-bottom: 18px; }}
+    .dashboard-intro {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }}
+    .dashboard-intro h2 {{ font-size: 1.65rem; line-height: 1.15; margin: 0 0 12px; text-wrap: balance; }}
+    .dashboard-intro p {{ margin: 0; color: #475467; max-width: 780px; }}
+    .dashboard-side {{ background: #111827; color: #fff; border-radius: 8px; padding: 18px; }}
+    .dashboard-side b {{ display: block; font-size: 1.25rem; margin-bottom: 8px; }}
+    .dashboard-side p {{ margin: 0; color: #d0d5dd; }}
+    .section-title {{ display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 10px; margin-top: 22px; }}
+    .section-title h2 {{ margin: 0; }}
+    .section-title p {{ margin: 0; color: var(--muted); }}
+    .explain-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }}
+    .explain-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }}
+    .explain-card b {{ display: block; margin-bottom: 8px; }}
+    .explain-card p {{ margin: 0; color: var(--muted); }}
+    .note {{ background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 14px 16px; color: #7c2d12; margin-bottom: 18px; }}
+    .search-panel {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 22px; }}
+    .search-panel form {{ margin-bottom: 0; }}
+    @media (max-width: 860px) {{
+      header {{ padding-inline: 16px; }}
+      main {{ padding-inline: 16px; }}
+      .home-hero {{ grid-template-columns: 1fr; min-height: auto; padding-block-start: 24px; }}
+      .start-card {{ order: -1; }}
+      .hero-copy h2 {{ font-size: 2.15rem; }}
+      .landing-grid {{ grid-template-columns: 1fr; }}
+      .dashboard-hero {{ grid-template-columns: 1fr; }}
+      .explain-grid {{ grid-template-columns: 1fr 1fr; }}
+    }}
+    @media (max-width: 520px) {{
+      nav {{ display: none; }}
+      .start-card .form-row {{ grid-template-columns: 1fr; }}
+      .hero-copy h2 {{ font-size: 1.85rem; }}
+      .explain-grid {{ grid-template-columns: 1fr; }}
+    }}
   </style>
 </head>
 <body>{body}</body>
@@ -159,14 +244,13 @@ def page(title: str, body: str) -> str:
 
 def nav_html(user: sqlite3.Row | None = None) -> str:
     if not user:
-        return '<nav><a href="/public">публичный поиск</a><a href="/login">вход</a></nav>'
-    links = ['<a href="/">поиск ID</a>']
+        return '<nav><a href="#start">старт</a><a href="#about">о проекте</a></nav>'
+    links = ['<a href="/">статус</a>']
     if user["role"] in {"admin", "manager"}:
         links += [
             '<a href="/universities">вузы</a>',
             '<a href="/competitions">конкурсы</a>',
             '<a href="/applicants">абитуриенты</a>',
-            '<a href="/status">статус данных</a>',
         ]
     if user["role"] == "admin":
         links.append('<a href="/admin/users">пользователи</a>')
@@ -179,15 +263,46 @@ def header(title: str, user: sqlite3.Row | None = None) -> str:
     return f"<header><h1>{esc(title)}</h1>{nav_html(user)}</header>"
 
 
-def metric(label: str, value) -> str:
-    return f'<div class="metric"><span class="muted">{esc(label)}</span><b>{esc(value)}</b></div>'
+def metric(label: str, value, href: str | None = None, desc: str | None = None) -> str:
+    body = f'<span class="muted">{esc(label)}</span><b>{esc(value)}</b>'
+    if desc:
+        body += f'<small>{esc(desc)}</small>'
+    if href:
+        return f'<a class="metric" href="{esc(href)}">{body}</a>'
+    return f'<div class="metric">{body}</div>'
 
 
-def chance_html(result: ChanceResult) -> str:
+def chance_html(result: ChanceResult, seats=None) -> str:
     percent = "н/д" if result.chance_percent is None else f"{result.chance_percent}%"
+    seats_text = "н/д" if not seats else str(seats)
+    percent_formula = (
+        "н/д: количество мест не указано или равно нулю"
+        if result.chance_percent is None or not seats
+        else f"({seats} - {result.effective_blockers}) / {seats} * 100 = {percent}"
+    )
+    formula = (
+        f"1.0 * {result.above_consent_here} + "
+        f"0.15 * {result.above_consent_elsewhere} + "
+        f"0.55 * {result.above_no_consent} = {result.effective_blockers}"
+    )
     return (
         f'<span class="pill">{esc(result.chance_label)} · {percent}</span>'
         f'<br><span class="muted">эффективно выше: {result.effective_blockers}, прогнозное место: {result.projected_rank}</span>'
+        '<details class="chance-details">'
+        '<summary>почему такой шанс</summary>'
+        '<dl>'
+        f'<dt>Согласие здесь</dt><dd>{result.above_consent_here} человек выше, вес 1.0</dd>'
+        f'<dt>Согласие в другом конкурсе</dt><dd>{result.above_consent_elsewhere} человек выше, вес 0.15</dd>'
+        f'<dt>Без найденного согласия</dt><dd>{result.above_no_consent} человек выше, вес 0.55</dd>'
+        f'<dt>Мест</dt><dd>{esc(seats_text)}</dd>'
+        f'<dt>Эффективно выше</dt><dd>{result.effective_blockers}</dd>'
+        f'<dt>Прогнозное место</dt><dd>{result.projected_rank}</dd>'
+        f'<dt>Итог</dt><dd>{percent}</dd>'
+        '</dl>'
+        f'<code class="chance-formula">эффективно выше: {esc(formula)}</code>'
+        f'<code class="chance-formula">процент: {esc(percent_formula)}</code>'
+        f'<p class="muted">{esc(result.explanation)}</p>'
+        '</details>'
     )
 
 
@@ -377,13 +492,17 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/logout":
             return self.logout()
 
-        user = self.require_user()
-        if not user:
-            return
         if parsed.path == "/":
+            user = self.current_user()
+            if not user:
+                return self.home_page()
             if user["role"] == "applicant" and user["applicant_id"]:
                 return self.redirect("/applicant?" + urlencode({"id": user["applicant_id"]}))
             return self.search_page(parsed, user)
+
+        user = self.require_user()
+        if not user:
+            return
         if parsed.path == "/universities":
             return self.universities_page(parsed, user)
         if parsed.path == "/university":
@@ -397,7 +516,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/applicant":
             return self.applicant_page(parsed, public=False, user=user)
         if parsed.path == "/status":
-            return self.status_page(user)
+            return self.redirect("/")
         if parsed.path == "/admin/users":
             return self.admin_users_page(user)
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -421,26 +540,93 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         return parse_qs(self.rfile.read(length).decode("utf-8"))
 
-    def login_page(self, error=""):
-        error_html = f"<p class='danger'>{esc(error)}</p>" if error else ""
+    def public_stats(self) -> sqlite3.Row:
+        with db_connect() as conn:
+            return conn.execute(
+                """
+                SELECT
+                  (SELECT count(*) FROM competitions) AS competitions,
+                  (SELECT count(*) FROM entries) AS entries,
+                  (SELECT count(DISTINCT applicant_id) FROM entries) AS applicants
+                """
+            ).fetchone()
+
+    def home_page(self, error=""):
+        stats = self.public_stats()
+        error_html = f"<p class='danger' role='alert'>{esc(error)}</p>" if error else ""
         self.send_html(
             HTTPStatus.OK,
             page(
-                "Вход",
+                "Vvuzz Online",
                 f"""{header("Vvuzz Online")}
-<main style="max-width:440px">
-<div class="panel">
-{error_html}
-<form method="post" action="/login">
-  <input name="username" placeholder="Логин" autocomplete="username" required>
-  <input name="password" placeholder="Пароль" autocomplete="current-password" required>
-  <button type="submit">Войти</button>
-</form>
-<p class="muted"><a href="/public">Публичный поиск по ID участника</a></p>
-</div>
+<main class="home-shell">
+<section class="home-hero" id="start">
+  <div class="hero-copy">
+    <h2>Проверьте свое место в конкурсных списках без лишних переходов</h2>
+    <p>Vvuzz Online собирает публичные конкурсные списки, помогает найти участника по ID и показывает понятную оценку положения в выбранных конкурсах.</p>
+    <div class="grid">
+      {metric("Конкурсов", f"{stats['competitions']:,}")}
+      {metric("Строк списков", f"{stats['entries']:,}")}
+      {metric("Участников", f"{stats['applicants']:,}")}
+    </div>
+    <div class="hero-points" aria-label="Возможности">
+      <span>публичный поиск по ID</span>
+      <span>оценка шанса</span>
+      <span>кабинет для команды</span>
+    </div>
+  </div>
+  <div class="start-card" aria-label="Старт">
+    <section class="form-section">
+      <h3>Найти себя</h3>
+      <p>Введите публичный ID участника, чтобы открыть свои конкурсы.</p>
+      <form method="get" action="/public/applicant">
+        <div>
+          <label for="public-applicant-id">ID участника</label>
+          <input id="public-applicant-id" name="id" placeholder="Например, 123456789" inputmode="numeric" enterkeyhint="search" required>
+        </div>
+        <button class="secondary" type="submit">Показать мои конкурсы</button>
+      </form>
+    </section>
+    <section class="form-section">
+      <h3>Войти в кабинет</h3>
+      <p>Для администраторов и менеджеров проекта.</p>
+      {error_html}
+      <form method="post" action="/login">
+        <div class="form-row">
+          <div>
+            <label for="username">Логин</label>
+            <input id="username" name="username" autocomplete="username" required>
+          </div>
+          <div>
+            <label for="current-password">Пароль</label>
+            <input id="current-password" name="password" type="password" autocomplete="current-password" required>
+          </div>
+        </div>
+        <button type="submit">Войти</button>
+      </form>
+    </section>
+  </div>
+</section>
+<section class="landing-grid" id="about" aria-label="О проекте">
+  <div class="landing-item">
+    <b>Одна стартовая точка</b>
+    <p>Главная страница работает и как вход, и как быстрый публичный поиск по себе.</p>
+  </div>
+  <div class="landing-item">
+    <b>Без лишней навигации</b>
+    <p>Публичному пользователю достаточно знать свой ID: остальные страницы открываются из результата.</p>
+  </div>
+  <div class="landing-item">
+    <b>Прозрачная эвристика</b>
+    <p>Оценка учитывает людей выше, согласия и найденные альтернативные конкурсы, но не гарантирует зачисление.</p>
+  </div>
+</section>
 </main>""",
             ),
         )
+
+    def login_page(self, error=""):
+        return self.home_page(error)
 
     def login_submit(self):
         data = self.read_form()
@@ -462,41 +648,44 @@ class Handler(BaseHTTPRequestHandler):
 
     def logout(self):
         self.send_response(HTTPStatus.SEE_OTHER)
-        self.send_header("Location", "/login")
+        self.send_header("Location", "/")
         self.send_header("Set-Cookie", "sid=; Max-Age=0; Path=/")
         self.end_headers()
 
     def public_index(self):
-        self.send_html(
-            HTTPStatus.OK,
-            page(
-                "Публичный поиск",
-                f"""{header("Vvuzz Online")}
-<main style="max-width:720px">
-<div class="panel">
-<h2>Публичный поиск по ID участника</h2>
-<form method="get" action="/public/applicant">
-  <input name="id" placeholder="ID участника" inputmode="numeric" required>
-  <button type="submit">Показать мои конкурсы</button>
-</form>
-<p class="muted">Сервис агрегирует публичные данные Госуслуг. Оценка шанса является эвристикой и не гарантирует зачисление.</p>
-</div>
-</main>""",
-            ),
+        return self.home_page()
+
+    def status_stats(self) -> sqlite3.Row:
+        with db_connect() as conn:
+            return conn.execute(
+                """
+                SELECT
+                  (SELECT count(*) FROM applicants) AS applicants,
+                  (SELECT count(*) FROM universities) AS universities,
+                  (SELECT count(*) FROM programs) AS programs,
+                  (SELECT count(*) FROM competitions_core) AS competitions,
+                  (SELECT count(*) FROM applications) AS applications,
+                  (SELECT count(*) FROM ingest_batches) AS ingest_batches,
+                  (SELECT max(received_at) FROM ingest_batches) AS last_ingest_received_at,
+                  (SELECT max(fetched_at) FROM ingest_batches) AS last_ingest_fetched_at
+                """
+            ).fetchone()
+
+    def status_metrics_html(self, stats: sqlite3.Row) -> str:
+        return (
+            f'{metric("Абитуриентов", f"{stats["applicants"]:,}", "/applicants", "Постраничный список публичных ID.")}'
+            f'{metric("Вузов", stats["universities"], "/universities", "Сводка по вузам, программам и строкам.")}'
+            f'{metric("Программ", stats["programs"], None, "Направления подготовки внутри вузов.")}'
+            f'{metric("Конкурсов", f"{stats["competitions"]:,}", "/competitions", "Фильтр по вузу, программе, квоте и форме.")}'
+            f'{metric("Заявлений", f"{stats["applications"]:,}", None, "Строки участников в конкурсных списках.")}'
+            f'{metric("Завершенных циклов обновления данных", stats["ingest_batches"], None, "Примененные обновления текущего снимка.")}'
         )
 
     def search_page(self, parsed, user):
         params = parse_qs(parsed.query)
         applicant_id = params.get("applicant_id", [""])[0].strip()
-        with db_connect() as conn:
-            stats = conn.execute(
-                """
-                SELECT
-                  (SELECT count(*) FROM competitions) AS competitions,
-                  (SELECT count(*) FROM entries) AS entries,
-                  (SELECT count(*) FROM users) AS users
-                """
-            ).fetchone()
+        stats = self.status_stats()
+        last_ingest = row_get(stats, "last_ingest_received_at", "") or "нет завершенных циклов"
         results = ""
         if applicant_id:
             return self.redirect("/applicant?" + urlencode({"id": applicant_id}))
@@ -506,15 +695,77 @@ class Handler(BaseHTTPRequestHandler):
                 "Поиск",
                 f"""{header("Vvuzz Online", user)}
 <main>
+<section class="dashboard-hero">
+  <div class="dashboard-intro">
+    <h2>Рабочий снимок конкурсных списков для анализа поступления</h2>
+    <p>Здесь собран снимок публичных конкурсных списков Госуслуг / «Поступление в вуз онлайн» за 2025 год. По одному ID видно все найденные конкурсы участника, его места, приоритеты, согласия и расчетный шанс по каждому направлению.</p>
+  </div>
+  <aside class="dashboard-side">
+    <b>Актуальность снимка</b>
+    <p>Завершенных циклов обновления данных: {esc(stats['ingest_batches'])}. Последнее обновление: {esc(last_ingest)}.</p>
+  </aside>
+</section>
+
+<section class="section-title">
+  <h2>Статус данных</h2>
+  <p>Счетчики текущего снимка конкурсных списков.</p>
+</section>
 <div class="grid">
-  {metric("Конкурсов", f"{stats['competitions']:,}")}
-  {metric("Строк абитуриентов", f"{stats['entries']:,}")}
-  {metric("Пользователей", f"{stats['users']:,}")}
+  {self.status_metrics_html(stats)}
 </div>
-<form method="get" action="/">
-  <input name="applicant_id" value="{esc(applicant_id)}" placeholder="ID участника" inputmode="numeric" required>
-  <button type="submit">Найти</button>
-</form>
+
+<section class="search-panel">
+  <h2>Поиск по ID</h2>
+  <form method="get" action="/">
+    <label for="root-applicant-id">ID участника</label>
+    <input id="root-applicant-id" name="applicant_id" value="{esc(applicant_id)}" placeholder="Например, 4150096" inputmode="numeric" required>
+    <button type="submit">Найти</button>
+  </form>
+</section>
+
+<section class="section-title">
+  <h2>Как это устроено</h2>
+  <p>Коротко о данных и расчете, чтобы метрики не были черным ящиком.</p>
+</section>
+<section class="explain-grid">
+  <article class="explain-card">
+    <b>Источник</b>
+    <p>Публичные конкурсные списки: вуз, программа, конкурс, количество мест, позиция участника, приоритет, согласие и текущий статус заявления.</p>
+  </article>
+  <article class="explain-card">
+    <b>Поиск по ID</b>
+    <p>Один ID сопоставляется со всеми конкурсами, где участник найден, поэтому в карточке видно несколько вузов, программ и квот сразу.</p>
+  </article>
+  <article class="explain-card">
+    <b>Кто выше</b>
+    <p>Для каждого конкурса считаются люди выше участника: с согласием здесь, с согласием в другом конкурсе и без найденного согласия.</p>
+  </article>
+  <article class="explain-card">
+    <b>Цикл обновления</b>
+    <p>Это завершенная загрузка нового снимка списков в сервис. Число показывает, сколько таких обновлений уже применено.</p>
+  </article>
+</section>
+
+<section class="explain-grid">
+  <article class="explain-card">
+    <b>Формула шанса</b>
+    <p>Эффективно выше = 1.0 × согласие здесь + 0.15 × согласие в другом конкурсе + 0.55 × без найденного согласия.</p>
+  </article>
+  <article class="explain-card">
+    <b>Процент</b>
+    <p>Шанс = (места − эффективно выше) / места × 100%. Итог ограничивается диапазоном от 0 до 100%.</p>
+  </article>
+  <article class="explain-card">
+    <b>Как читать результат</b>
+    <p>Высокий шанс означает, что расчетных блокирующих меньше, чем мест. Низкий шанс — что впереди слишком много участников с учетом согласий и весов.</p>
+  </article>
+  <article class="explain-card">
+    <b>Ограничение</b>
+    <p>Это эвристика по текущему снимку публичных данных, а не гарантия зачисления и не официальный прогноз вуза.</p>
+  </article>
+</section>
+
+<p class="note">Главная продуктовая ценность появляется в короткое окно после публикации конкурсных списков: важно не просто место в списке, а понимание, сколько людей выше уже выбрали другие конкурсы или реально удерживают место здесь.</p>
 {results}
 </main>""",
             ),
@@ -546,7 +797,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error(HTTPStatus.FORBIDDEN)
         with db_connect() as conn:
             found = self.applicant_rows(conn, applicant_id)
-            rendered_rows = []
+            items = []
             for row in found:
                 _, chance, metrics = competition_metrics(conn, row["competition_id"], applicant_id)
                 if public:
@@ -555,6 +806,17 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     q = urlencode({"id": row["competition_id"], "focus_applicant_id": applicant_id})
                     link = f"<a href='/competition?{q}'>конкурс</a>"
+                items.append((row, chance, link))
+            items.sort(
+                key=lambda item: (
+                    item[1].chance_percent is not None if item[1] else False,
+                    item[1].chance_percent if item[1] and item[1].chance_percent is not None else -1,
+                    -(row_get(item[0], "ordinal", 0) or 0),
+                ),
+                reverse=True,
+            )
+            rendered_rows = []
+            for row, chance, link in items:
                 rendered_rows.append(
                     "<tr>"
                     f"<td>{esc(row['university'])}</td>"
@@ -565,7 +827,7 @@ class Handler(BaseHTTPRequestHandler):
                     f"<td>{esc(row['competition_priority'])}</td>"
                     f"<td>{esc(row['consent_text'])}</td>"
                     f"<td>{esc(row['status'])}</td>"
-                    f"<td>{chance_html(chance) if chance else 'н/д'}</td>"
+                    f"<td>{chance_html(chance, row['seats']) if chance else 'н/д'}</td>"
                     f"<td>{link}</td>"
                     "</tr>"
                 )
@@ -579,6 +841,7 @@ class Handler(BaseHTTPRequestHandler):
                 f"""{back_header}
 <main>
 <h2>ID участника {esc(applicant_id)}</h2>
+<p class="muted">Конкурсы отсортированы по расчетному шансу: сначала самый высокий процент, строки с «н/д» ниже. Раскройте «почему такой шанс», чтобы увидеть веса и числа по конкретному конкурсу.</p>
 {public_note}
 <table>
 <thead><tr><th>Вуз</th><th>Программа</th><th>Конкурс</th><th>Мест</th><th>Позиция</th><th>Приоритет</th><th>Согласие</th><th>Статус</th><th>Шанс</th><th></th></tr></thead>
@@ -754,29 +1017,122 @@ class Handler(BaseHTTPRequestHandler):
     def applicants_page(self, parsed, user):
         if user["role"] not in {"admin", "manager"}:
             return self.send_error(HTTPStatus.FORBIDDEN)
-        q = parse_qs(parsed.query).get("q", [""])[0].strip()
+        params = parse_qs(parsed.query)
+        q = params.get("q", [""])[0].strip()
+        after = params.get("after", [""])[0].strip()
+        partial = params.get("partial", [""])[0] == "1"
+        page_size = 100
         with db_connect() as conn:
-            rows = conn.execute(
+            selected = conn.execute(
                 """
-                SELECT ap.applicant_id, count(a.id) AS applications,
-                       sum(CASE WHEN a.has_consent = 1 THEN 1 ELSE 0 END) AS consents
-                FROM applicants ap
-                JOIN applications a ON a.applicant_id = ap.id
-                WHERE ? = '' OR ap.applicant_id LIKE ?
-                GROUP BY ap.applicant_id
-                ORDER BY applications DESC, ap.applicant_id
-                LIMIT 500
+                SELECT id, applicant_id
+                FROM applicants
+                WHERE (? = '' OR applicant_id LIKE ? ESCAPE '\\')
+                  AND (? = '' OR applicant_id > ?)
+                ORDER BY applicant_id
+                LIMIT ?
                 """,
-                (q, f"%{q}%"),
+                (q, like_prefix(q), after, after, page_size + 1),
             ).fetchall()
-        body_rows = "".join(
-            f"<tr><td><a href='/applicant?id={esc(row['applicant_id'])}'>{esc(row['applicant_id'])}</a></td><td>{row['applications']}</td><td>{row['consents']}</td></tr>"
+            has_more = len(selected) > page_size
+            selected = selected[:page_size]
+            rows = []
+            if selected:
+                placeholders = ",".join("?" for _ in selected)
+                rows = conn.execute(
+                    f"""
+                    SELECT ap.applicant_id, count(a.id) AS applications,
+                           COALESCE(sum(CASE WHEN a.has_consent = 1 THEN 1 ELSE 0 END), 0) AS consents
+                    FROM applicants ap
+                    LEFT JOIN applications a ON a.applicant_id = ap.id
+                    WHERE ap.id IN ({placeholders})
+                    GROUP BY ap.id, ap.applicant_id
+                    ORDER BY ap.applicant_id
+                    """,
+                    [row["id"] for row in selected],
+                ).fetchall()
+        next_after = rows[-1]["applicant_id"] if rows else after
+        body_rows = self.applicants_rows_html(rows)
+        if partial:
+            return self.send_json(
+                HTTPStatus.OK,
+                {
+                    "html": body_rows,
+                    "has_more": has_more,
+                    "next_after": next_after,
+                    "count": len(rows),
+                },
+            )
+        next_qs = urlencode({"q": q, "after": next_after}) if has_more else ""
+        next_link = (
+            f'<p id="applicants-fallback" class="muted"><a href="/applicants?{next_qs}">Показать еще</a></p>'
+            if has_more
+            else '<p id="applicants-fallback" class="muted">Больше строк нет.</p>'
+        )
+        empty_row = "<tr><td colspan='3'>Ничего не найдено</td></tr>" if not rows else ""
+        script_q = json.dumps(q, ensure_ascii=False)
+        script_after = json.dumps(next_after, ensure_ascii=False)
+        script_has_more = "true" if has_more else "false"
+        self.send_html(HTTPStatus.OK, page("Абитуриенты", f"""{header("Абитуриенты", user)}<main>
+<form method="get" action="/applicants">
+  <label for="applicant-search">ID участника</label>
+  <input id="applicant-search" name="q" value="{esc(q)}" placeholder="начните вводить ID" inputmode="numeric">
+  <button>Найти</button>
+</form>
+<p class="muted">Загружается по 100 участников. Поиск работает по началу ID, чтобы не сканировать всю базу.</p>
+<table><thead><tr><th>ID</th><th>Конкурсов</th><th>Согласий</th></tr></thead><tbody id="applicants-body">{body_rows or empty_row}</tbody></table>
+<div id="applicants-sentinel" aria-hidden="true"></div>
+<p id="applicants-status" class="muted" aria-live="polite"></p>
+{next_link}
+<script>
+(() => {{
+  const tbody = document.getElementById("applicants-body");
+  const sentinel = document.getElementById("applicants-sentinel");
+  const status = document.getElementById("applicants-status");
+  const fallback = document.getElementById("applicants-fallback");
+  let q = {script_q};
+  let after = {script_after};
+  let hasMore = {script_has_more};
+  let loading = false;
+
+  async function loadNext() {{
+    if (!hasMore || loading) return;
+    loading = true;
+    status.textContent = "Загружаю следующую страницу...";
+    const params = new URLSearchParams({{ partial: "1", q, after }});
+    try {{
+      const response = await fetch(`/applicants?${{params}}`, {{ headers: {{ "Accept": "application/json" }} }});
+      if (!response.ok) throw new Error(`HTTP ${{response.status}}`);
+      const data = await response.json();
+      if (data.html) tbody.insertAdjacentHTML("beforeend", data.html);
+      after = data.next_after || after;
+      hasMore = Boolean(data.has_more);
+      status.textContent = hasMore ? "" : "Больше строк нет.";
+      if (fallback) fallback.hidden = !hasMore;
+    }} catch (error) {{
+      status.textContent = "Не удалось загрузить следующую страницу. Используйте кнопку ниже.";
+      if (fallback) fallback.hidden = false;
+    }} finally {{
+      loading = false;
+    }}
+  }}
+
+  if ("IntersectionObserver" in window && sentinel) {{
+    if (fallback) fallback.hidden = true;
+    const observer = new IntersectionObserver((entries) => {{
+      if (entries.some((entry) => entry.isIntersecting)) loadNext();
+    }}, {{ rootMargin: "600px 0px" }});
+    observer.observe(sentinel);
+  }}
+}})();
+</script>
+</main>"""))
+
+    def applicants_rows_html(self, rows):
+        return "".join(
+            f"<tr><td><a href='/applicant?{urlencode({'id': row['applicant_id']})}'>{esc(row['applicant_id'])}</a></td><td>{row['applications']}</td><td>{row['consents']}</td></tr>"
             for row in rows
         )
-        self.send_html(HTTPStatus.OK, page("Абитуриенты", f"""{header("Абитуриенты", user)}<main>
-<form><input name="q" value="{esc(q)}" placeholder="ID участника"><button>Найти</button></form>
-<table><thead><tr><th>ID</th><th>Конкурсов</th><th>Согласий</th></tr></thead><tbody>{body_rows}</tbody></table>
-</main>"""))
 
     def status_page(self, user):
         if user["role"] not in {"admin", "manager"}:
@@ -796,7 +1152,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_html(HTTPStatus.OK, page("Статус данных", f"""{header("Статус данных", user)}<main>
 <div class="grid">
 {metric("Абитуриентов", f"{stats['applicants']:,}")}{metric("Вузов", stats['universities'])}{metric("Программ", stats['programs'])}
-{metric("Конкурсов", f"{stats['competitions']:,}")}{metric("Заявлений", f"{stats['applications']:,}")}{metric("Ingest batch", stats['ingest_batches'])}
+{metric("Конкурсов", f"{stats['competitions']:,}")}{metric("Заявлений", f"{stats['applications']:,}")}{metric("Завершенных циклов обновления данных", stats['ingest_batches'])}
 </div>
 </main>"""))
 

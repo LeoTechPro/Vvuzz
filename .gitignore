@@ -28,6 +28,8 @@ ENV/
 *.sqlite
 *.sqlite-*
 *.sqlite-journal
+*.sqlite.gz
+*.uploading
 *.db
 *.db-*
 *.xlsx
