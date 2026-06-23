@@ -673,12 +673,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def status_metrics_html(self, stats: sqlite3.Row) -> str:
         return (
-            f'{metric("Абитуриентов", f"{stats["applicants"]:,}", "/applicants", "Постраничный список публичных ID.")}'
-            f'{metric("Вузов", stats["universities"], "/universities", "Сводка по вузам, программам и строкам.")}'
-            f'{metric("Программ", stats["programs"], None, "Направления подготовки внутри вузов.")}'
-            f'{metric("Конкурсов", f"{stats["competitions"]:,}", "/competitions", "Фильтр по вузу, программе, квоте и форме.")}'
-            f'{metric("Заявлений", f"{stats["applications"]:,}", None, "Строки участников в конкурсных списках.")}'
-            f'{metric("Завершенных циклов обновления данных", stats["ingest_batches"], None, "Примененные обновления текущего снимка.")}'
+            metric("Абитуриентов", f"{stats['applicants']:,}", "/applicants", "Постраничный список публичных ID.")
+            + metric("Вузов", stats["universities"], "/universities", "Сводка по вузам, программам и строкам.")
+            + metric("Программ", stats["programs"], None, "Направления подготовки внутри вузов.")
+            + metric("Конкурсов", f"{stats['competitions']:,}", "/competitions", "Фильтр по вузу, программе, квоте и форме.")
+            + metric("Заявлений", f"{stats['applications']:,}", None, "Строки участников в конкурсных списках.")
+            + metric("Завершенных циклов обновления данных", stats["ingest_batches"], None, "Примененные обновления текущего снимка.")
         )
 
     def search_page(self, parsed, user):
@@ -1252,6 +1252,7 @@ class Handler(BaseHTTPRequestHandler):
                     program_id = get_or_create_name(conn, "programs", comp.get("program"))
                     university_id = get_or_create_name(conn, "universities", comp.get("university"))
                     existing = conn.execute("SELECT id FROM competitions_core WHERE source_path = ?", (source_path,)).fetchone()
+                    applications = comp.get("applications") or []
                     values = (
                         source_path,
                         comp.get("file_name") or Path(source_path).name,
@@ -1263,7 +1264,7 @@ class Handler(BaseHTTPRequestHandler):
                         comp.get("quota_type"),
                         comp.get("seats"),
                         json.dumps(comp.get("path") or [], ensure_ascii=False),
-                        len(comp.get("applications") or []),
+                        len(applications),
                         payload.get("fetched_at") or now_iso(),
                     )
                     if existing:
@@ -1288,7 +1289,9 @@ class Handler(BaseHTTPRequestHandler):
                             values,
                         )
                         competition_id = cur.lastrowid
-                    for app in comp.get("applications") or []:
+                    if comp.get("replace_applications"):
+                        conn.execute("DELETE FROM applications WHERE competition_id = ?", (competition_id,))
+                    for app in applications:
                         if upsert_application(conn, competition_id, app):
                             inserted_apps += 1
                         else:

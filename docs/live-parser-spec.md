@@ -117,6 +117,32 @@ Payload для ingest:
   - schema mismatch;
   - превышение заданного rpm.
 
+## Vuznavigator 2026 local-PC fetch
+
+Для опубликованных списков 2026 используется отдельный адаптер `vuznav-fetch`. Его нормальный production-сценарий: запуск на личном ПК/доверенной сети, локальный raw-архив и запись нормализованных батчей в SQLite на VDS через ingest API.
+
+Минимальный запуск с личного ПК:
+
+```powershell
+$env:VVUZZ_INGEST_TOKEN = "<token>"
+python .\gosuslugi_parser.py vuznav-fetch --mode both `
+  --raw-dir I:\VvuzzRaw `
+  --target ingest+https://vvuzz.intdata.pro/api/ingest/batch `
+  --url "https://www.gosuslugi.ru/vuznavigator/specialties/2.19.03.01/2/1214/1/103736/-/applicants/138272?program=2_1__103736___" `
+  --rpm 10
+```
+
+Что делает `vuznav-fetch`:
+
+1. извлекает `competition_id` из URL страницы Вузнавигатора;
+2. проверяет public status endpoints `statuses/applicants` и `statuses/ratings`;
+3. если `hasListOfApplicants=true`, получает `/competition/<id>/applicants`;
+4. пишет raw payload только в `--raw-dir` при `raw-only`/`both`;
+5. нормализует строки в ingest payload и отправляет его в `POST /api/ingest/batch`;
+6. в ingest payload ставит `replace_applications=true`, чтобы новый снимок конкретного конкурса заменял старые строки этого конкурса, а не накапливал дубли.
+
+По умолчанию для этого режима `--rpm 10`, не `55`, потому что Госуслуги чувствительны к IP/VPN/datacenter reputation.
+
 ## Current limitation
 
-До фиксации актуальных API/URL Госуслуг live parser готовит transport/raw/ingest pipeline. Реальный discovery и mapping 2026 нужно добавить после появления данных и просмотра сетевых запросов браузера.
+VDS может использоваться для discovery frontend/API схемы через статику `gu-st.ru`, но не является надежным источником production fetch: `www.gosuslugi.ru` может блокировать datacenter/VPN IP даже при VPN exclusions. Production fetch запускается с личного ПК/доверенной сети и пишет на VDS только через ingest API.

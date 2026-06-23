@@ -114,13 +114,30 @@ python .\gosuslugi_parser.py live-crawl --mode both `
   --url "https://actual-gosuslugi-endpoint"
 ```
 
+## Что сделано после появления данных
+
+- Зафиксирован Вузнавигатор как актуальный источник публичных списков 2026.
+- Добавлен `vuznav-fetch`: одиночный/батчевый fetch URL вида `/vuznavigator/.../applicants/<competition_id>`.
+- Нормальная схема работы: личный ПК получает данные Госуслуг, raw остается локально, VDS SQLite наполняется через `POST /api/ingest/batch`.
+- Для Вузнавигатора дефолтный лимит снижен до `10 rpm`.
+- Ingest поддерживает `replace_applications=true` для замены снимка одного конкурса.
+
+Пример запуска с личного ПК:
+
+```powershell
+$env:VVUZZ_INGEST_TOKEN = "<token>"
+python .\gosuslugi_parser.py vuznav-fetch --mode both `
+  --raw-dir I:\VvuzzRaw `
+  --target ingest+https://vvuzz.intdata.pro/api/ingest/batch `
+  --url "https://www.gosuslugi.ru/vuznavigator/specialties/2.19.03.01/2/1214/1/103736/-/applicants/138272?program=2_1__103736___" `
+  --rpm 10
+```
+
 ## Что еще нужно сделать после появления данных
 
-- Найти реальные URL/API списков через браузерный Network.
-- Зафиксировать реальный формат ответа в `docs/facts.md`.
-- Написать live-discovery адаптер, который заполняет `parser_queue`.
-- Написать live-fetch адаптер, который сохраняет raw response и вызывает нормализацию.
-- Проверить, отличается ли нормализуемая структура 2026 от fixture-архива 2025.
+- Проверить фактический shape `/competition/<id>/applicants` с личного ПК без VPN/datacenter IP и при необходимости уточнить mapping полей.
+- Найти discovery API для массового получения `competition_id` по вузам/специальностям.
+- Добавить live-discovery адаптер, который заполняет `parser_queue`.
 - Добавить staleness-поля в UI: когда конкретный конкурс обновлялся последний раз.
 
 ## Stop Conditions

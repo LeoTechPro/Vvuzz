@@ -138,6 +138,24 @@
   - получено 5188 `entries`;
   - dry-run HTTP probe записал run/log без сетевого обращения.
 
+## Публичные списки 2026 на Госуслугах / Вузнавигатор
+
+Проверено 23.06.2026 по переданному URL:
+
+- пример публичной страницы списка подавших документы:
+  `https://www.gosuslugi.ru/vuznavigator/specialties/2.19.03.01/2/1214/1/103736/-/applicants/138272?program=2_1__103736___`;
+- страница относится к приложению `epgu-app-vuz-navigator-st`, версия frontend bundle: `3.504.14-13-vuz-navigator`;
+- app shell подтягивается со статики `https://gu-st.ru/epgu-app-vuz-navigator-st/`;
+- релевантные public API endpoints в JS bundle:
+  - `GET /api/university-applicant-list/v1/public/2026/competition/statuses/applicants?groupId=<competition_id>`;
+  - `GET /api/university-applicant-list/v1/public/2026/competition/statuses/ratings?groupIds=<competition_id>`;
+  - `GET /api/university-applicant-list/v1/public/2026/competition/<competition_id>/applicants`;
+  - `GET /api/university-applicant-list/v1/public/2026/competition/<competition_id>/ratings`;
+  - `POST /api/vuz-navigator/public/v1/2026/competition-groups/details` with `{"competitionIds": [...]}`.
+- для примера `competition_id=138272` endpoint statuses/applicants возвращал `hasListOfApplicants=true`; statuses/ratings возвращал `hasRating=false`.
+
+Operational caveat: из VDS прямой доступ к `www.gosuslugi.ru` может зависать/блокироваться даже после добавления `gosuslugi.ru` в AdGuard VPN site exclusions; проверять с личного ПК или с сети без datacenter/VPN reputation. Статику `gu-st.ru` можно использовать для discovery frontend/API схемы.
+
 ## Product Risk
 
 Главная ценность сервиса возникает в коротком окне после публикации конкурсных списков. Если обновление данных занимает 24-48 часов, это может быть недостаточно полезно для абитуриента. Более реалистичная продуктовая формулировка: сервис оценки шансов по последнему доступному снимку данных с прозрачным временем обновления.

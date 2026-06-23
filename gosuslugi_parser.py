@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -435,6 +436,8 @@ def extract_competitions(payload: bytes, content_type: str | None) -> list[dict]
 
 
 def ensure_norm_target(conn: sqlite3.Connection) -> None:
+    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='applicants'").fetchone():
+        return
     from normalize_sqlite import SCHEMA
 
     conn.executescript(SCHEMA)
@@ -500,6 +503,8 @@ def write_norm_sqlite(db_path: Path, competitions: list[dict], fetched_at: str) 
                 values,
             ).lastrowid
             comp_count += 1
+        if comp.get("replace_applications"):
+            conn.execute("DELETE FROM applications WHERE competition_id = ?", (competition_id,))
         for app in comp.get("applications") or []:
             external_id = str(app.get("applicant_id") or "").strip()
             if not external_id:
@@ -561,6 +566,281 @@ def post_ingest(target_url: str, token: str, batch: dict, timeout: int) -> dict:
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+VUZNAV_URL_RE = re.compile(
+    r"/vuznavigator/specialties/"
+    r"(?P<okso>[^/]+)/(?P<education_level>[^/]+)/(?P<organization_id>\d+)/"
+    r"(?P<education_form>[^/]+)/(?P<program_ids>[^/]+)/(?P<profile_ids>[^/]+)/"
+    r"(?P<list_kind>applicants|ratings)/(?P<competition_id>\d+)"
+)
+
+VUZNAV_API_ROOT = "https://www.gosuslugi.ru/api"
+
+
+def parse_vuznav_url(url: str) -> dict:
+    parsed = urllib.parse.urlparse(url)
+    match = VUZNAV_URL_RE.search(parsed.path)
+    if not match:
+        raise SystemExit(f"unsupported vuznavigator URL: {url}")
+    data = match.groupdict()
+    query = urllib.parse.parse_qs(parsed.query)
+    data["url"] = url
+    data["program_query"] = (query.get("program") or [""])[0]
+    data["competition_id"] = int(data["competition_id"])
+    data["organization_id"] = int(data["organization_id"])
+    return data
+
+
+def build_vuznav_api_urls(meta: dict) -> dict:
+    competition_id = meta["competition_id"]
+    return {
+        "applicants_status": f"{VUZNAV_API_ROOT}/university-applicant-list/v1/public/2026/competition/statuses/applicants?groupId={competition_id}",
+        "ratings_status": f"{VUZNAV_API_ROOT}/university-applicant-list/v1/public/2026/competition/statuses/ratings?groupIds={competition_id}",
+        "applicants": f"{VUZNAV_API_ROOT}/university-applicant-list/v1/public/2026/competition/{competition_id}/applicants",
+        "ratings": f"{VUZNAV_API_ROOT}/university-applicant-list/v1/public/2026/competition/{competition_id}/ratings",
+        "details": f"{VUZNAV_API_ROOT}/vuz-navigator/public/v1/2026/competition-groups/details",
+    }
+
+
+def vuznav_request(url: str, timeout: int, method: str = "GET", body: dict | None = None, referer: str | None = None) -> tuple[bytes, str | None, int]:
+    headers = {
+        "User-Agent": "VvuzzVuzNavigatorFetcher/0.1 (+local owner-run; rate-limited)",
+        "Accept": "application/json,text/plain,*/*",
+    }
+    data = None
+    if referer:
+        headers["Referer"] = referer
+    if body is not None:
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json; charset=utf-8"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read(), response.headers.get("Content-Type"), response.status
+
+
+def load_json_payload(payload: bytes, content_type: str | None, url: str):
+    if is_block_payload(payload, content_type):
+        raise RuntimeError(f"block page detected for {url}")
+    text = payload.decode("utf-8", "ignore")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"non-json response for {url}: {exc}") from exc
+    if isinstance(data, dict) and data.get("errorCode"):
+        raise RuntimeError(f"api error for {url}: {data.get('errorCode')} {data.get('errorMessage')}")
+    if not isinstance(data, (dict, list)):
+        raise RuntimeError(f"unexpected json root for {url}: {type(data).__name__}")
+    return data
+
+
+def vuznav_status_flags(statuses: dict) -> tuple[bool, bool]:
+    applicants = statuses.get("applicants_status") or {}
+    ratings = statuses.get("ratings_status") or {}
+    has_applicants = any(bool(row.get("hasListOfApplicants")) for row in applicants.get("groups") or [])
+    has_rating = any(bool(row.get("hasRating")) for row in ratings.get("groupIds") or [])
+    return has_applicants, has_rating
+
+
+def first_list(data, keys: tuple[str, ...]) -> list:
+    if isinstance(data, list):
+        return data
+    if not isinstance(data, dict):
+        return []
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, list):
+            return value
+    for value in data.values():
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def first_dict(data, keys: tuple[str, ...]) -> dict:
+    if isinstance(data, dict):
+        for key in keys:
+            value = data.get(key)
+            if isinstance(value, dict):
+                return value
+    return {}
+
+
+def vuznav_truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    return bool(text) and text not in {"0", "false", "none", "no", "нет", "—", "-"}
+
+
+def vuznav_application(row: dict) -> dict:
+    consent = row.get("consent")
+    score_parts = []
+    for key in ("entranceTestMark", "entranceTestsMark", "examMarks", "entranceExams"):
+        value = row.get(key)
+        if value:
+            score_parts.append(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))
+    return {
+        "applicant_id": str(row.get("idApplication") or row.get("applicantId") or row.get("applicationId") or ""),
+        "ordinal": row.get("rating") or row.get("placeInRating") or row.get("place"),
+        "competition_priority": row.get("priority"),
+        "consent_text": "" if consent is None else str(consent),
+        "has_consent": vuznav_truthy(consent),
+        "score_total": row.get("sumMark") or row.get("totalScore"),
+        "exam_scores_text": "; ".join(str(part) for part in score_parts),
+        "individual_score": row.get("achievementsMark") or row.get("individualScore"),
+        "status": row.get("statusName") or row.get("statusId"),
+        "selected_at_moscow": row.get("competitionSelectionDate"),
+    }
+
+
+def vuznav_competition(meta: dict, applicants_data, details_data, fetched_at: str) -> dict:
+    applications = [app for app in (vuznav_application(row) for row in first_list(applicants_data, ("applicants", "applications", "items", "list"))) if app["applicant_id"]]
+    detail_rows = first_list(details_data or {}, ("items", "groups", "competitionGroups", "competitions"))
+    detail = next((row for row in detail_rows if str(row.get("id")) == str(meta["competition_id"])), detail_rows[0] if detail_rows else {})
+    program_labels = detail.get("programLabels") or detail.get("programs") or []
+    if isinstance(program_labels, list):
+        program = ". ".join(str(item) for item in program_labels if item)
+    else:
+        program = str(program_labels or "")
+    path = ["gosuslugi", "vuznavigator", str(meta["competition_id"])]
+    return {
+        "source_path": f"gosuslugi:vuznavigator:competition:{meta['competition_id']}:applicants",
+        "file_name": f"vuznavigator-{meta['competition_id']}-applicants.json",
+        "program": program or detail.get("program") or meta.get("program_query") or meta.get("okso"),
+        "education_level": str(detail.get("educationLevel") or meta.get("education_level") or ""),
+        "city": detail.get("city") or detail.get("regionName"),
+        "university": detail.get("organizationName") or detail.get("organization") or f"organization:{meta['organization_id']}",
+        "study_form": str(detail.get("educationForm") or meta.get("education_form") or ""),
+        "quota_type": detail.get("placeTypeName") or detail.get("quotaType") or detail.get("place"),
+        "seats": detail.get("numberPlaces") or detail.get("places") or detail.get("sum"),
+        "path": path,
+        "applications": applications,
+        "replace_applications": True,
+        "fetched_at": fetched_at,
+    }
+
+
+def write_vuznav_raw(raw_archive: RawArchive | None, record: dict, payload: bytes | None = None, error: str | None = None) -> None:
+    if not raw_archive:
+        return
+    if error:
+        raw_archive.write_error({**record, "error": error})
+    elif payload is not None:
+        raw_archive.write_payload(record, payload)
+
+
+def command_vuznav_fetch(args) -> int:
+    urls = read_urls(args)
+    run_id = args.run_id or now_iso().replace(":", "-")
+    raw_archive = RawArchive(args.raw_dir, run_id) if args.mode in {"raw-only", "both"} else None
+    targets = [target_kind(target) for target in (args.target or [])]
+    if args.mode in {"norm-only", "both"} and not targets:
+        raise SystemExit(f"{args.mode} needs at least one --target")
+    if args.mode == "raw-only" and targets:
+        raise SystemExit("raw-only must not receive --target")
+    limiter = RateLimiter(args.rpm)
+    processed = 0
+    errors = 0
+    for page_url in urls:
+        meta = parse_vuznav_url(page_url)
+        api_urls = build_vuznav_api_urls(meta)
+        statuses = {}
+        payloads = {}
+        details_data = None
+        try:
+            if args.dry_run:
+                print(f"dry-run: competition={meta['competition_id']} mode={args.mode} rpm={args.rpm}")
+                processed += 1
+                continue
+            for key in ("applicants_status", "ratings_status"):
+                limiter.wait()
+                fetched_at = now_iso()
+                payload, content_type, status = vuznav_request(api_urls[key], args.timeout, referer=page_url)
+                digest = sha256_bytes(payload)
+                write_vuznav_raw(raw_archive, {
+                    "run_id": run_id, "url": api_urls[key], "source_key": f"vuznav:{meta['competition_id']}:{key}",
+                    "status_code": status, "content_type": content_type, "bytes": len(payload), "sha256": digest,
+                    "fetched_at": fetched_at, "competition_id": meta["competition_id"], "original_page_url": page_url,
+                }, payload)
+                statuses[key] = load_json_payload(payload, content_type, api_urls[key])
+            has_applicants, has_rating = vuznav_status_flags(statuses)
+            if not has_applicants:
+                print(f"skip competition={meta['competition_id']} hasListOfApplicants=false")
+                processed += 1
+                continue
+            limiter.wait()
+            fetched_at = now_iso()
+            payload, content_type, status = vuznav_request(api_urls["applicants"], args.timeout, referer=page_url)
+            digest = sha256_bytes(payload)
+            write_vuznav_raw(raw_archive, {
+                "run_id": run_id, "url": api_urls["applicants"], "source_key": f"vuznav:{meta['competition_id']}:applicants",
+                "status_code": status, "content_type": content_type, "bytes": len(payload), "sha256": digest,
+                "fetched_at": fetched_at, "competition_id": meta["competition_id"], "original_page_url": page_url,
+            }, payload)
+            applicants_data = load_json_payload(payload, content_type, api_urls["applicants"])
+            payloads["applicants"] = payload
+            if args.fetch_details:
+                limiter.wait()
+                detail_payload, detail_content_type, detail_status = vuznav_request(
+                    api_urls["details"], args.timeout, method="POST", body={"competitionIds": [str(meta["competition_id"])]}, referer=page_url
+                )
+                detail_digest = sha256_bytes(detail_payload)
+                write_vuznav_raw(raw_archive, {
+                    "run_id": run_id, "url": api_urls["details"], "source_key": f"vuznav:{meta['competition_id']}:details",
+                    "status_code": detail_status, "content_type": detail_content_type, "bytes": len(detail_payload), "sha256": detail_digest,
+                    "fetched_at": now_iso(), "competition_id": meta["competition_id"], "original_page_url": page_url,
+                }, detail_payload)
+                details_data = load_json_payload(detail_payload, detail_content_type, api_urls["details"])
+            if has_rating and args.fetch_ratings:
+                limiter.wait()
+                rating_payload, rating_content_type, rating_status = vuznav_request(api_urls["ratings"], args.timeout, referer=page_url)
+                rating_digest = sha256_bytes(rating_payload)
+                write_vuznav_raw(raw_archive, {
+                    "run_id": run_id, "url": api_urls["ratings"], "source_key": f"vuznav:{meta['competition_id']}:ratings",
+                    "status_code": rating_status, "content_type": rating_content_type, "bytes": len(rating_payload), "sha256": rating_digest,
+                    "fetched_at": now_iso(), "competition_id": meta["competition_id"], "original_page_url": page_url,
+                }, rating_payload)
+            competition = vuznav_competition(meta, applicants_data, details_data, fetched_at)
+            if args.mode in {"norm-only", "both"}:
+                batch = {
+                    "run_id": run_id,
+                    "source": "gosuslugi_vuznavigator",
+                    "source_key": competition["source_path"],
+                    "payload_sha256": digest,
+                    "fetched_at": fetched_at,
+                    "started_at": run_id,
+                    "config": {"source_url": page_url, "competition_id": meta["competition_id"]},
+                    "competitions": [competition],
+                }
+                for kind, target in targets:
+                    if kind == "sqlite":
+                        comp_count, app_count = write_norm_sqlite(Path(target), [competition], fetched_at)
+                        print(f"sqlite target={target} competitions={comp_count} applications={app_count}")
+                    else:
+                        if not args.ingest_token:
+                            raise SystemExit("ingest target needs --ingest-token or VVUZZ_INGEST_TOKEN")
+                        result = post_ingest(target, args.ingest_token, batch, args.timeout)
+                        print(f"ingest target={target} result={result}")
+            print(f"vuznav competition={meta['competition_id']} applicants={len(competition['applications'])} rating={has_rating}")
+            processed += 1
+        except urllib.error.HTTPError as exc:
+            errors += 1
+            write_vuznav_raw(raw_archive, {"run_id": run_id, "url": getattr(exc, "url", page_url), "status_code": exc.code, "fetched_at": now_iso(), "competition_id": meta["competition_id"]}, error=str(exc))
+            print(f"vuznav competition={meta['competition_id']} HTTP {exc.code}: {exc}", file=sys.stderr)
+            if exc.code in {403, 429}:
+                print(f"stop: block/rate-limit signal; backoff={args.backoff_seconds}s", file=sys.stderr)
+                return 2
+        except Exception as exc:
+            errors += 1
+            write_vuznav_raw(raw_archive, {"run_id": run_id, "url": page_url, "fetched_at": now_iso(), "competition_id": meta.get("competition_id")}, error=str(exc))
+            print(f"vuznav competition={meta.get('competition_id')} error: {exc}", file=sys.stderr)
+            if args.stop_on_error:
+                return 1
+    print(f"vuznav-fetch done processed={processed} errors={errors} run_id={run_id}")
+    return 0 if errors == 0 else 1
 
 
 def command_live_crawl(args) -> int:
@@ -699,6 +979,23 @@ def build_parser():
     p_live.add_argument("--backoff-seconds", type=int, default=DEFAULT_BACKOFF_SECONDS)
     p_live.add_argument("--dry-run", action="store_true")
     p_live.set_defaults(func=command_live_crawl)
+
+    p_vuznav = sub.add_parser("vuznav-fetch", help="Fetch Gosuslugi Vuznavigator 2026 applicant lists and send normalized batches to sqlite/ingest targets.")
+    p_vuznav.add_argument("--mode", choices=["raw-only", "norm-only", "both"], required=True)
+    p_vuznav.add_argument("--url", action="append", help="Vuznavigator applicants URL. Can be repeated.")
+    p_vuznav.add_argument("--url-file", type=Path, help="Text file with one Vuznavigator applicants URL per line.")
+    p_vuznav.add_argument("--raw-dir", type=Path, default=RAW_DIR)
+    p_vuznav.add_argument("--target", action="append", help="sqlite://path or ingest+https://host/api/ingest/batch. Can be repeated.")
+    p_vuznav.add_argument("--ingest-token", default=os.getenv("VVUZZ_INGEST_TOKEN", ""))
+    p_vuznav.add_argument("--run-id")
+    p_vuznav.add_argument("--rpm", type=int, default=10, help="Conservative default for Gosuslugi public-service endpoints.")
+    p_vuznav.add_argument("--timeout", type=int, default=30)
+    p_vuznav.add_argument("--backoff-seconds", type=int, default=DEFAULT_BACKOFF_SECONDS)
+    p_vuznav.add_argument("--dry-run", action="store_true")
+    p_vuznav.add_argument("--fetch-details", action=argparse.BooleanOptionalAction, default=True, help="Fetch competition metadata details endpoint.")
+    p_vuznav.add_argument("--fetch-ratings", action=argparse.BooleanOptionalAction, default=False, help="Also fetch ratings endpoint when hasRating=true.")
+    p_vuznav.add_argument("--stop-on-error", action="store_true")
+    p_vuznav.set_defaults(func=command_vuznav_fetch)
 
     return parser
 
