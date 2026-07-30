@@ -1,0 +1,5 @@
+# Proposed additions inside Nginx http{}.
+# This file is source-only and is not installed by the implementation commit.
+log_format vvuzz_public '$remote_addr - $host [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
+limit_req_zone $binary_remote_addr zone=vvuzz_public_lookup:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=vvuzz_manage_login:10m rate=5r/m;

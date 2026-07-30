@@ -65,12 +65,14 @@ python3 -m vvuzz_public.cli create-admin --username '<operator>'
    ```bash
    python3 -m venv /int/.runtime/vvuzz-public/venv
    /int/.runtime/vvuzz-public/venv/bin/pip install \
-     --requirement /int/vvuzz/requirements.txt
+     --require-hashes \
+     --requirement /int/vvuzz/requirements.lock
    ```
 
 2. Установить `deploy/systemd/vvuzz-public-beta.service`.
-3. Добавить проверенные директивы из
-   `deploy/nginx/vvuzz-public-beta.conf.example` в TLS server.
+3. Добавить директивы из
+   `deploy/nginx/vvuzz-public-http.conf.example` внутрь `http{}`, а locations
+   из `deploy/nginx/vvuzz-public-beta.conf.example` — внутрь TLS `server{}`.
 4. Выполнить `nginx -t`, затем разрешённые reload/start.
 5. Проверить `/beta/healthz`, `/beta`, `/beta/archive` и `/beta/manage`.
 6. Убедиться, что формат access log записывает `$uri`, а не `$request_uri`, и

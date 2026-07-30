@@ -6,7 +6,7 @@ import getpass
 
 from .config import Settings
 from .db import connection
-from .security import hash_password
+from .security import audit, hash_password
 
 
 def now_iso() -> str:
@@ -44,6 +44,19 @@ def main() -> int:
                   updated_at=excluded.updated_at
                 """,
                 (args.username.strip(), hash_password(password), args.role, timestamp, timestamp),
+            )
+            user = conn.execute(
+                "SELECT id FROM auth_users WHERE username = ?",
+                (args.username.strip(),),
+            ).fetchone()
+            conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user["id"],))
+            audit(
+                conn,
+                event_type="credentials_updated",
+                outcome="success",
+                user_id=user["id"],
+                target_type="auth_user",
+                target_key=args.username.strip(),
             )
             conn.commit()
         print("Управляющая учётная запись сохранена")

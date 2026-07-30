@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -10,6 +11,18 @@ from migrations.migrate import refresh_stats
 
 def now_iso() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
+
+
+def payload_digest(payload: dict) -> str:
+    content = {
+        key: value
+        for key, value in payload.items()
+        if key != "payload_sha256"
+    }
+    canonical = json.dumps(
+        content, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def named_id(conn: sqlite3.Connection, table: str, value: str | None) -> int | None:
@@ -176,8 +189,91 @@ def refresh_and_finalize(
     return "final" if payload.get("finalize_campaign") else "ready"
 
 
+def refresh_legacy_campaigns(
+    conn: sqlite3.Connection,
+    *,
+    competition_ids: list[int],
+    payload: dict,
+) -> list[int]:
+    if not competition_ids:
+        return []
+    has_campaigns = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='campaigns'"
+    ).fetchone()
+    if not has_campaigns:
+        return []
+    conn.row_factory = sqlite3.Row
+    placeholders = ",".join("?" for _ in competition_ids)
+    campaigns = conn.execute(
+        f"""
+        SELECT DISTINCT c.id, c.status
+        FROM campaigns c
+        JOIN competitions_core core ON core.campaign_id = c.id
+        WHERE core.id IN ({placeholders})
+        """,
+        competition_ids,
+    ).fetchall()
+    timestamp = now_iso()
+    snapshot_at = str(payload.get("fetched_at") or timestamp)
+    source_key = f"legacy:{payload.get('source_key') or 'batch'}"
+    run_id = f"legacy:{payload.get('run_id') or payload_digest(payload)}"
+    snapshot_ids = []
+    for campaign in campaigns:
+        if campaign["status"] == "final":
+            continue
+        totals = conn.execute(
+            f"""
+            SELECT count(DISTINCT c.id), count(a.id), count(DISTINCT a.applicant_id)
+            FROM competitions_core c
+            LEFT JOIN applications a ON a.competition_id = c.id
+            WHERE c.campaign_id=? AND c.id IN ({placeholders})
+            """,
+            (campaign["id"], *competition_ids),
+        ).fetchone()
+        snapshot = conn.execute(
+            """
+            INSERT INTO snapshots(
+              campaign_id, run_id, source_key, snapshot_at, status,
+              competition_count, application_count, applicant_count,
+              payload_sha256, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(campaign_id, run_id, source_key) DO UPDATE SET
+              snapshot_at=excluded.snapshot_at,
+              status='ready',
+              competition_count=excluded.competition_count,
+              application_count=excluded.application_count,
+              applicant_count=excluded.applicant_count,
+              payload_sha256=excluded.payload_sha256,
+              updated_at=excluded.updated_at
+            RETURNING id
+            """,
+            (
+                campaign["id"],
+                run_id,
+                source_key,
+                snapshot_at,
+                totals[0],
+                totals[1],
+                totals[2],
+                payload_digest(payload),
+                timestamp,
+                timestamp,
+            ),
+        ).fetchone()
+        snapshot_ids.append(snapshot["id"])
+        conn.commit()
+        refresh_stats(conn, campaign["id"], timestamp)
+        conn.execute(
+            "UPDATE campaign_stats SET snapshot_id=? WHERE campaign_id=?",
+            (snapshot["id"], campaign["id"]),
+        )
+        conn.commit()
+    return snapshot_ids
+
+
 def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
     validate_payload(payload)
+    expected_digest = payload_digest(payload)
     timestamp = now_iso()
     year = payload["campaign_year"]
     conn.execute("BEGIN IMMEDIATE")
@@ -195,7 +291,8 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
         ).fetchone()
         duplicate = conn.execute(
             """
-            SELECT id, status, competition_count, application_count, error_count
+            SELECT id, status, competition_count, application_count, error_count,
+                   payload_sha256
             FROM snapshots
             WHERE campaign_id=? AND run_id=? AND source_key=?
             """,
@@ -203,6 +300,13 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
         ).fetchone()
         if duplicate:
             conn.rollback()
+            if duplicate["payload_sha256"] not in {None, expected_digest}:
+                return 409, {
+                    "accepted": False,
+                    "duplicate": True,
+                    "snapshot_id": duplicate["id"],
+                    "error": "idempotency key was already used with another payload",
+                }
             final_status = duplicate["status"]
             if payload.get("refresh_stats") or payload.get("finalize_campaign"):
                 final_status = refresh_and_finalize(
@@ -235,7 +339,7 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
                 str(payload["run_id"]),
                 str(payload["source_key"]),
                 str(payload["snapshot_at"]),
-                payload.get("payload_sha256"),
+                expected_digest,
                 timestamp,
                 timestamp,
             ),

@@ -7,6 +7,7 @@
   <p>Публичный поиск не требует аккаунта. Эта форма предназначена только для управления сервисом.</p>
   {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
   <form class="manage-form" method="post" action="{{ base_path }}/manage/login">
+    <input type="hidden" name="login_csrf" value="{{ login_csrf }}">
     <div class="field"><label for="username">Логин</label><input id="username" name="username" autocomplete="username" required></div>
     <div class="field"><label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
     <button class="primary-action" type="submit">Войти</button>

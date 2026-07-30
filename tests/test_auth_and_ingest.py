@@ -38,12 +38,25 @@ def create_admin(db_path):
     conn.close()
 
 
+def login_csrf(client: TestClient) -> str:
+    response = client.get("/manage")
+    assert response.status_code == 200
+    token = client.cookies.get("vvuzz_login_csrf")
+    assert token
+    return token
+
+
 def test_manage_session_rotation_csrf_and_logout(migrated_db):
     create_admin(migrated_db)
     client = client_for(migrated_db)
+    csrf_before_login = login_csrf(client)
     login = client.post(
         "/manage/login",
-        data={"username": "operator", "password": "correct horse battery staple"},
+        data={
+            "username": "operator",
+            "password": "correct horse battery staple",
+            "login_csrf": csrf_before_login,
+        },
         follow_redirects=False,
     )
     assert login.status_code == 303
@@ -64,17 +77,44 @@ def test_manage_session_rotation_csrf_and_logout(migrated_db):
 def test_manage_lockout_after_repeated_failures(migrated_db):
     create_admin(migrated_db)
     client = client_for(migrated_db)
+    csrf_before_login = login_csrf(client)
     for _ in range(5):
         response = client.post(
             "/manage/login",
-            data={"username": "operator", "password": "wrong password"},
+            data={
+                "username": "operator",
+                "password": "wrong password",
+                "login_csrf": csrf_before_login,
+            },
         )
         assert response.status_code == 401
     response = client.post(
         "/manage/login",
-        data={"username": "operator", "password": "correct horse battery staple"},
+        data={
+            "username": "operator",
+            "password": "correct horse battery staple",
+            "login_csrf": csrf_before_login,
+        },
     )
     assert response.status_code == 401
+
+
+def test_manage_login_requires_csrf(migrated_db):
+    create_admin(migrated_db)
+    client = client_for(migrated_db)
+    assert client.post(
+        "/manage/login",
+        data={"username": "operator", "password": "correct horse battery staple"},
+    ).status_code == 422
+    login_csrf(client)
+    assert client.post(
+        "/manage/login",
+        data={
+            "username": "operator",
+            "password": "correct horse battery staple",
+            "login_csrf": "forged",
+        },
+    ).status_code == 403
 
 
 def test_ingest_v2_is_idempotent(migrated_db):
@@ -114,11 +154,27 @@ def test_ingest_v2_is_idempotent(migrated_db):
     assert first.json()["snapshot_id"] == second.json()["snapshot_id"]
 
     finalized_payload = {**payload, "finalize_campaign": True}
-    finalized = client.post(
+    conflict = client.post(
         "/api/ingest/v2/batch", json=finalized_payload, headers=headers
     )
-    assert finalized.status_code == 200
-    assert finalized.json()["duplicate"] is True
+    assert conflict.status_code == 409
+
+    final_payload = {
+        **payload,
+        "run_id": "run-test-final",
+        "source_key": "source-test-final",
+        "competitions": [],
+        "finalize_campaign": True,
+    }
+    finalized = client.post(
+        "/api/ingest/v2/batch", json=final_payload, headers=headers
+    )
+    finalized_retry = client.post(
+        "/api/ingest/v2/batch", json=final_payload, headers=headers
+    )
+    assert finalized.status_code == 202
+    assert finalized_retry.status_code == 200
+    assert finalized_retry.json()["duplicate"] is True
 
     conn = sqlite3.connect(migrated_db)
     assert conn.execute(
@@ -128,6 +184,27 @@ def test_ingest_v2_is_idempotent(migrated_db):
         "SELECT status FROM campaigns WHERE year=2026"
     ).fetchone()[0] == "final"
     conn.close()
+
+
+def test_ingest_v2_rejects_reused_key_with_changed_payload(migrated_db):
+    client = client_for(migrated_db)
+    payload = {
+        "campaign_year": 2026,
+        "run_id": "stable-run",
+        "source_key": "stable-source",
+        "snapshot_at": "2026-07-30T15:00:00+00:00",
+        "competitions": [],
+    }
+    headers = {"X-Vvuzz-Ingest-Token": "test-ingest-token"}
+    assert client.post(
+        "/api/ingest/v2/batch", json=payload, headers=headers
+    ).status_code == 202
+    changed = {**payload, "snapshot_at": "2026-07-30T15:01:00+00:00"}
+    response = client.post(
+        "/api/ingest/v2/batch", json=changed, headers=headers
+    )
+    assert response.status_code == 409
+    assert response.json()["accepted"] is False
 
 
 def test_final_campaign_rejects_ingest(migrated_db):

@@ -18,17 +18,33 @@
       <header><span class="risk-label">{{ item.risk_label }}</span><span>Позиция {{ item.position }} из {{ item.places or "—" }} мест</span></header>
       <h3>{{ item.university }}</h3>
       <p>{{ item.program }}</p>
+      <div class="competition-meta">
+        <span>{{ item.quota_type }}</span>
+        <span>{{ item.study_form }}</span>
+        {% if item.priority %}<span>приоритет {{ item.priority }}</span>{% endif %}
+      </div>
       <dl class="metric-row">
         <div><dt>Эффективно выше</dt><dd>{{ item.effective_competitors }}</dd></div>
         <div><dt>Согласие здесь</dt><dd>{{ item.consent_here }}</dd></div>
         <div><dt>В другом месте</dt><dd>{{ item.consent_elsewhere }}</dd></div>
         <div><dt>Без согласия</dt><dd>{{ item.no_consent }}</dd></div>
       </dl>
-      <details><summary>Как рассчитано</summary><p>{{ item.formula }}</p></details>
+      <progress
+        class="position-bar"
+        max="{{ [item.places or 0, item.effective_competitors or 0, 1] | max }}"
+        value="{{ [item.effective_competitors or 0, [item.places or 0, item.effective_competitors or 0, 1] | max] | min }}"
+        aria-label="Мест {{ item.places or 0 }}, эффективных конкурентов выше {{ item.effective_competitors }}"
+      >{{ item.effective_competitors }}</progress>
+      <details>
+        <summary>Как рассчитано</summary>
+        <p>{{ item.formula }}</p>
+        <p>Расчётная позиция: {{ item.projected_position }}. Процент: {{ item.chance_percent if item.chance_percent is not none else "н/д" }}%.</p>
+      </details>
     </article>
     {% endfor %}
   </section>
   {% endif %}
   {% endfor %}
 {% endif %}
+<p class="freshness">Снимок: {{ result.freshness_at or "дата не указана" }}</p>
 {% endblock %}

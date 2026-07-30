@@ -1,10 +1,5 @@
-# Proposed beta additions. This file is source-only and is not installed by the
-# implementation commit. `limit_req_zone` and `log_format` belong to http{}.
-log_format vvuzz_public '$remote_addr - $host [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
-limit_req_zone $binary_remote_addr zone=vvuzz_public_lookup:10m rate=10r/m;
-limit_req_zone $binary_remote_addr zone=vvuzz_manage_login:10m rate=5r/m;
-
-# Add these locations to the existing TLS server{}.
+# Proposed beta locations for the existing TLS server{}.
+# Install vvuzz-public-http.conf.example in http{} first.
 location = /beta {
     return 308 /beta/;
 }
@@ -18,6 +13,17 @@ location = /beta/api/public/lookup {
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_pass http://127.0.0.1:9186/api/public/lookup;
+}
+
+location = /beta/lookup {
+    limit_req zone=vvuzz_public_lookup burst=5 nodelay;
+    access_log /var/log/nginx/vvuzz-public.access.log vvuzz_public;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_pass http://127.0.0.1:9186/lookup;
 }
 
 location = /beta/api/public/competition {

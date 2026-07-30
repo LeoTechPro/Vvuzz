@@ -15,6 +15,8 @@ def test_additive_migration_preserves_counts_and_campaigns(migrated_db):
     }
     second = apply(migrated_db, with_stats=True)
     assert second["after_counts"] == report["counts"]
+    assert second["after_counts_by_year"] == report["counts_by_year"]
+    assert set(report["counts_by_year"]) == {"2025", "2026"}
 
     conn = sqlite3.connect(migrated_db)
     assert conn.execute("SELECT username FROM users").fetchall() == [("legacy",)]

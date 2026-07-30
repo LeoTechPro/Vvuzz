@@ -1236,6 +1236,7 @@ class Handler(BaseHTTPRequestHandler):
         competitions = payload.get("competitions") or []
         inserted_apps = 0
         updated_apps = 0
+        competition_ids = []
         errors = []
         with db_connect() as conn:
             conn.execute(
@@ -1289,6 +1290,7 @@ class Handler(BaseHTTPRequestHandler):
                             values,
                         )
                         competition_id = cur.lastrowid
+                    competition_ids.append(competition_id)
                     if comp.get("replace_applications"):
                         conn.execute("DELETE FROM applications WHERE competition_id = ?", (competition_id,))
                     for app in applications:
@@ -1318,6 +1320,14 @@ class Handler(BaseHTTPRequestHandler):
                 (run_id, payload.get("source_key"), payload.get("payload_sha256"), payload.get("fetched_at"), now_iso(), len(competitions), inserted_apps + updated_apps, len(errors)),
             )
             conn.commit()
+            if not errors:
+                from vvuzz_public.ingest import refresh_legacy_campaigns
+
+                refresh_legacy_campaigns(
+                    conn,
+                    competition_ids=competition_ids,
+                    payload=payload,
+                )
         status = HTTPStatus.ACCEPTED if not errors else HTTPStatus.BAD_REQUEST
         self.send_json(status, {"accepted": not errors, "inserted": inserted_apps, "updated": updated_apps, "skipped": 0, "errors": errors})
 

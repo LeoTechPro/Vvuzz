@@ -30,6 +30,45 @@ def counts(conn: sqlite3.Connection) -> dict[str, int]:
     }
 
 
+def counts_by_year(
+    conn: sqlite3.Connection, *, use_campaign_id: bool
+) -> dict[str, dict[str, int]]:
+    if use_campaign_id:
+        year_sql = "c.year"
+        joins = (
+            "FROM campaigns c "
+            "LEFT JOIN competitions_core cc ON cc.campaign_id = c.id "
+            "LEFT JOIN applications a ON a.competition_id = cc.id"
+        )
+    else:
+        year_sql = (
+            "CASE WHEN lower(cc.source_path) LIKE '%2026%' THEN 2026 ELSE 2025 END"
+        )
+        joins = (
+            "FROM competitions_core cc "
+            "LEFT JOIN applications a ON a.competition_id = cc.id"
+        )
+    rows = conn.execute(
+        f"""
+        SELECT {year_sql} AS year,
+               count(DISTINCT cc.id) AS competitions,
+               count(a.id) AS applications,
+               count(DISTINCT a.applicant_id) AS applicants
+        {joins}
+        GROUP BY year
+        ORDER BY year
+        """
+    ).fetchall()
+    return {
+        str(row[0]): {
+            "competitions": row[1],
+            "applications": row[2],
+            "applicants": row[3],
+        }
+        for row in rows
+    }
+
+
 def preflight(db_path: Path) -> dict:
     usage = shutil.disk_usage(db_path.parent)
     db_size = db_path.stat().st_size
@@ -42,6 +81,7 @@ def preflight(db_path: Path) -> dict:
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         integrity_check = conn.execute("PRAGMA integrity_check(1)").fetchone()[0]
         before = counts(conn)
+        before_by_year = counts_by_year(conn, use_campaign_id=False)
     finally:
         conn.close()
     return {
@@ -56,6 +96,7 @@ def preflight(db_path: Path) -> dict:
         "journal_mode": journal_mode,
         "integrity_check": integrity_check,
         "counts": before,
+        "counts_by_year": before_by_year,
     }
 
 
@@ -269,6 +310,12 @@ def apply(db_path: Path, *, with_stats: bool) -> dict:
         after = counts(conn)
         if after != report["counts"]:
             raise RuntimeError(f"Count parity failed: before={report['counts']} after={after}")
+        after_by_year = counts_by_year(conn, use_campaign_id=True)
+        if after_by_year != report["counts_by_year"]:
+            raise RuntimeError(
+                "Year count parity failed: "
+                f"before={report['counts_by_year']} after={after_by_year}"
+            )
         conn.commit()
         if with_stats:
             campaign_rows = list(
@@ -284,7 +331,12 @@ def apply(db_path: Path, *, with_stats: bool) -> dict:
                     timestamp=timestamp,
                 )
                 conn.commit()
-        return {**report, "after_counts": after, "stats_refreshed": with_stats}
+        return {
+            **report,
+            "after_counts": after,
+            "after_counts_by_year": after_by_year,
+            "stats_refreshed": with_stats,
+        }
     except Exception:
         conn.rollback()
         raise

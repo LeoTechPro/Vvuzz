@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from vvuzz_public.config import Settings
 from vvuzz_public.main import create_app
+from vvuzz_public.ingest import refresh_legacy_campaigns
 
 
 def client_for(db_path):
@@ -35,9 +36,20 @@ def test_lookup_is_post_only_and_privacy_bounded(migrated_db):
     assert payload["found"] is True
     assert payload["campaign_year"] == 2026
     assert payload["results"][0]["competition_id"] == 1
-    assert payload["results"][0]["consent_here"] == 1
-    assert payload["results"][0]["consent_elsewhere"] == 1
-    assert payload["results"][0]["no_consent"] == 1
+    assert "consent_here" not in payload["results"][0]
+    details = client.post(
+        "/api/public/competition",
+        json={
+            "year": 2026,
+            "applicant_id": "4150096",
+            "competition_ids": [payload["results"][0]["competition_id"]],
+        },
+    )
+    assert details.status_code == 200
+    detail = details.json()["competitions"][0]
+    assert detail["consent_here"] == 1
+    assert detail["consent_elsewhere"] == 1
+    assert detail["no_consent"] == 1
     assert "4150096" not in response.text
     assert client.get("/api/public/lookup?id=4150096").status_code == 405
 
@@ -95,7 +107,15 @@ def test_consent_in_another_campaign_is_not_counted(migrated_db):
         "/api/public/lookup",
         json={"year": 2026, "applicant_id": "4150096"},
     )
-    result = response.json()["results"][0]
+    competition_id = response.json()["results"][0]["competition_id"]
+    result = client_for(migrated_db).post(
+        "/api/public/competition",
+        json={
+            "year": 2026,
+            "applicant_id": "4150096",
+            "competition_ids": [competition_id],
+        },
+    ).json()["competitions"][0]
     assert result["consent_elsewhere"] == 1
     assert result["no_consent"] == 1
 
@@ -163,3 +183,61 @@ def test_lookup_paginates_more_than_50_competitions(migrated_db):
     assert first["truncated"] is True
     assert len(second["results"]) == 6
     assert second["truncated"] is False
+    combined = first["results"] + second["results"]
+    competition_ids = [item["competition_id"] for item in combined]
+    assert len(competition_ids) == len(set(competition_ids))
+    ordering = [(item["position"], item["competition_id"]) for item in combined]
+    assert ordering == sorted(ordering)
+
+
+def test_legacy_bridge_invalidates_cached_lookup(migrated_db):
+    client = client_for(migrated_db)
+    first = client.post(
+        "/api/public/lookup",
+        json={"year": 2026, "applicant_id": "4150096"},
+    ).json()
+    conn = sqlite3.connect(migrated_db)
+    conn.row_factory = sqlite3.Row
+    campaign_id = conn.execute(
+        "SELECT id FROM campaigns WHERE year=2026"
+    ).fetchone()[0]
+    applicant_id = conn.execute(
+        "SELECT id FROM applicants WHERE applicant_id='4150096'"
+    ).fetchone()[0]
+    cursor = conn.execute(
+        """
+        INSERT INTO competitions_core(
+          source_path, file_name, program_id, university_id, seats, path_json,
+          row_count, imported_at, campaign_id
+        ) VALUES ('gosuslugi2026/competition/legacy-bridge', 'legacy.json',
+                  1, 1, 3, '[]', 1, '2026-07-30T15:30:00+00:00', ?)
+        """,
+        (campaign_id,),
+    )
+    competition_id = cursor.lastrowid
+    conn.execute(
+        """
+        INSERT INTO applications(
+          competition_id, applicant_id, ordinal, competition_priority,
+          consent_text, has_consent
+        ) VALUES (?, ?, 2, 1, 'Нет', 0)
+        """,
+        (competition_id, applicant_id),
+    )
+    conn.commit()
+    refresh_legacy_campaigns(
+        conn,
+        competition_ids=[competition_id],
+        payload={
+            "run_id": "legacy-run",
+            "source_key": "legacy-source",
+            "fetched_at": "2026-07-30T15:30:00+00:00",
+            "competitions": [],
+        },
+    )
+    conn.close()
+    second = client.post(
+        "/api/public/lookup",
+        json={"year": 2026, "applicant_id": "4150096"},
+    ).json()
+    assert len(second["results"]) == len(first["results"]) + 1

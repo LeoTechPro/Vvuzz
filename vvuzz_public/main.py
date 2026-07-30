@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hmac
+import secrets
 import time
 from collections import OrderedDict, deque
 from pathlib import Path
@@ -23,6 +24,7 @@ from .repository import (
     campaigns,
     competition_details,
     lookup,
+    lookup_positions,
 )
 from .security import (
     audit,
@@ -79,6 +81,24 @@ def valid_applicant_id(value: object) -> str:
 
 def now_iso() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
+
+
+def new_login_csrf(key: bytes) -> str:
+    nonce = secrets.token_urlsafe(24)
+    return f"{nonce}.{digest(nonce, key)}"
+
+
+def valid_login_csrf(cookie_token: str, form_token: str, key: bytes) -> bool:
+    if not cookie_token or not form_token:
+        return False
+    try:
+        nonce, signature = form_token.rsplit(".", 1)
+    except ValueError:
+        return False
+    return (
+        hmac.compare_digest(cookie_token, form_token)
+        and hmac.compare_digest(signature, digest(nonce, key))
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -190,7 +210,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 year=year,
                 applicant_id=applicant_id,
                 freshness=campaign["freshness_at"],
-                limit=settings.lookup_limit,
+                limit=5000,
                 offset=0,
             )
         elapsed = (time.perf_counter() - started) * 1000
@@ -240,7 +260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             result = app.state.lookup_cache.get(cache_key)
             if result is None:
-                result = lookup(
+                result = lookup_positions(
                     conn,
                     campaign_id=campaign["id"],
                     year=year,
@@ -264,7 +284,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             year = int(payload.get("year"))
             raw_ids = payload.get("competition_ids") or []
-            competition_ids = list(dict.fromkeys(int(item) for item in raw_ids))[:5]
+            competition_ids = list(dict.fromkeys(int(item) for item in raw_ids))[:50]
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail="Некорректные параметры") from exc
         ensure_ready()
@@ -294,17 +314,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ensure_ready()
         session = current_session(request)
         if session is None:
-            return TEMPLATES.TemplateResponse(
+            login_csrf = new_login_csrf(settings.cache_hmac_key)
+            login_response = TEMPLATES.TemplateResponse(
                 request,
                 "manage_login.html",
-                {"base_path": settings.base_path, "error": "", "page": "manage"},
+                {
+                    "base_path": settings.base_path,
+                    "error": "",
+                    "page": "manage",
+                    "login_csrf": login_csrf,
+                },
             )
+            login_response.set_cookie(
+                "vvuzz_login_csrf",
+                login_csrf,
+                max_age=10 * 60,
+                path=settings.base_path or "/",
+                secure=settings.environment == "production",
+                httponly=True,
+                samesite="strict",
+            )
+            return login_response
         csrf_token = request.cookies.get("vvuzz_csrf", "")
         if not valid_csrf(session, csrf_token, settings.cache_hmac_key):
-            response = RedirectResponse(f"{settings.base_path}/manage", status_code=303)
-            response.delete_cookie(settings.session_cookie, path=settings.base_path or "/")
-            response.delete_cookie("vvuzz_csrf", path=settings.base_path or "/")
-            return response
+            redirect_response = RedirectResponse(
+                f"{settings.base_path}/manage", status_code=303
+            )
+            redirect_response.delete_cookie(
+                settings.session_cookie, path=settings.base_path or "/"
+            )
+            redirect_response.delete_cookie(
+                "vvuzz_csrf", path=settings.base_path or "/"
+            )
+            return redirect_response
         with connection(settings.db_path, readonly=True) as conn:
             stats = campaigns(conn)
             recent_audit = [
@@ -336,8 +378,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         username: str = Form(...),
         password: str = Form(...),
+        login_csrf: str = Form(...),
     ):
         ensure_ready()
+        if not valid_login_csrf(
+            request.cookies.get("vvuzz_login_csrf", ""),
+            login_csrf,
+            settings.cache_hmac_key,
+        ):
+            raise HTTPException(status_code=403, detail="CSRF-проверка не пройдена")
         with connection(settings.db_path) as conn:
             user = authenticate(conn, username=username.strip(), password=password)
             if user is None:
@@ -349,6 +398,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "base_path": settings.base_path,
                         "error": "Неверные данные или вход временно заблокирован.",
                         "page": "manage",
+                        "login_csrf": login_csrf,
                     },
                     status_code=401,
                 )
@@ -382,6 +432,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             httponly=False,
             samesite="strict",
         )
+        response.delete_cookie("vvuzz_login_csrf", path=path)
         return response
 
     @app.post("/manage/logout")

@@ -267,6 +267,24 @@
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || "Не удалось выполнить поиск");
+    if (result.results.length) {
+      const detailsResponse = await fetch(`${base}/api/public/competition`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          year: state.year,
+          applicant_id: state.applicantId,
+          competition_ids: result.results.map((item) => item.competition_id),
+        }),
+        cache: "no-store",
+      });
+      const details = await detailsResponse.json();
+      if (!detailsResponse.ok) {
+        throw new Error(details.detail || "Не удалось рассчитать положение");
+      }
+      const byId = new Map(details.competitions.map((item) => [item.competition_id, item]));
+      result.results = result.results.map((item) => byId.get(item.competition_id) || item);
+    }
     return result;
   }
 

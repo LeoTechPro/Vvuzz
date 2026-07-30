@@ -131,64 +131,7 @@ def archive_overview(conn: sqlite3.Connection, year: int) -> dict | None:
     return result
 
 
-def lookup(
-    conn: sqlite3.Connection,
-    *,
-    campaign_id: int,
-    year: int,
-    applicant_id: str,
-    freshness: str,
-    limit: int,
-    offset: int = 0,
-) -> dict:
-    rows = conn.execute(
-        """
-        WITH target AS (
-          SELECT
-            a.competition_id,
-            a.ordinal,
-            a.competition_priority,
-            a.consent_text,
-            a.has_consent,
-            a.score_total,
-            a.status
-          FROM applicants ap
-          JOIN applications a ON a.applicant_id = ap.id
-          JOIN competitions_core c ON c.id = a.competition_id
-          WHERE ap.applicant_id = ? AND c.campaign_id = ?
-          ORDER BY a.ordinal
-          LIMIT ? OFFSET ?
-        )
-        SELECT
-          t.*, c.seats, c.row_count, c.study_form, c.quota_type,
-          c.education_level, c.city, u.name AS university, p.name AS program,
-          count(above.id) AS total_before,
-          coalesce(sum(CASE WHEN above.has_consent = 1 THEN 1 ELSE 0 END), 0) AS consent_here,
-          coalesce(sum(CASE
-            WHEN above.has_consent = 0 AND EXISTS (
-              SELECT 1
-              FROM applications other
-              JOIN competitions_core other_competition
-                ON other_competition.id = other.competition_id
-              WHERE other.applicant_id = above.applicant_id
-                AND other.competition_id <> above.competition_id
-                AND other.has_consent = 1
-                AND other_competition.campaign_id = c.campaign_id
-            ) THEN 1 ELSE 0 END), 0) AS consent_elsewhere
-        FROM target t
-        JOIN competitions_core c ON c.id = t.competition_id
-        LEFT JOIN universities u ON u.id = c.university_id
-        LEFT JOIN programs p ON p.id = c.program_id
-        LEFT JOIN applications above
-          ON above.competition_id = t.competition_id
-         AND above.ordinal < t.ordinal
-        GROUP BY t.competition_id
-        ORDER BY t.ordinal
-        """,
-        (applicant_id, campaign_id, limit + 1, offset),
-    ).fetchall()
-    has_more = len(rows) > limit
-    rows = rows[:limit]
+def _result_items(rows: list[sqlite3.Row]) -> list[dict]:
     items = []
     for row in rows:
         total_before = as_int(row["total_before"])
@@ -228,6 +171,109 @@ def lookup(
         )
     order = {"stable": 0, "borderline": 1, "risk": 2}
     items.sort(key=lambda item: (order[item["risk"]], item["position"] or 10**9))
+    return items
+
+
+def lookup_positions(
+    conn: sqlite3.Connection,
+    *,
+    campaign_id: int,
+    year: int,
+    applicant_id: str,
+    freshness: str,
+    limit: int,
+    offset: int = 0,
+) -> dict:
+    rows = conn.execute(
+        """
+        SELECT a.competition_id, a.ordinal AS position,
+               a.competition_priority AS priority, a.score_total AS score,
+               a.status, c.seats AS places, c.study_form, c.quota_type,
+               c.education_level, c.city, u.name AS university, p.name AS program
+        FROM applicants ap
+        JOIN applications a ON a.applicant_id = ap.id
+        JOIN competitions_core c ON c.id = a.competition_id
+        LEFT JOIN universities u ON u.id = c.university_id
+        LEFT JOIN programs p ON p.id = c.program_id
+        WHERE ap.applicant_id = ? AND c.campaign_id = ?
+        ORDER BY a.ordinal, a.competition_id
+        LIMIT ? OFFSET ?
+        """,
+        (applicant_id, campaign_id, limit + 1, offset),
+    ).fetchall()
+    has_more = len(rows) > limit
+    items = [dict(row) for row in rows[:limit]]
+    return {
+        "found": bool(items),
+        "campaign_year": year,
+        "freshness_at": freshness,
+        "results": items,
+        "offset": offset,
+        "truncated": has_more,
+        "next_offset": offset + limit if has_more else None,
+        "warning": "Оценка основана на последнем снимке и не гарантирует поступление.",
+    }
+
+
+def lookup(
+    conn: sqlite3.Connection,
+    *,
+    campaign_id: int,
+    year: int,
+    applicant_id: str,
+    freshness: str,
+    limit: int,
+    offset: int = 0,
+) -> dict:
+    rows = conn.execute(
+        """
+        WITH target AS (
+          SELECT
+            a.competition_id,
+            a.ordinal,
+            a.competition_priority,
+            a.consent_text,
+            a.has_consent,
+            a.score_total,
+            a.status
+          FROM applicants ap
+          JOIN applications a ON a.applicant_id = ap.id
+          JOIN competitions_core c ON c.id = a.competition_id
+          WHERE ap.applicant_id = ? AND c.campaign_id = ?
+          ORDER BY a.ordinal, a.competition_id
+          LIMIT ? OFFSET ?
+        )
+        SELECT
+          t.*, c.seats, c.row_count, c.study_form, c.quota_type,
+          c.education_level, c.city, u.name AS university, p.name AS program,
+          count(above.id) AS total_before,
+          coalesce(sum(CASE WHEN above.has_consent = 1 THEN 1 ELSE 0 END), 0) AS consent_here,
+          coalesce(sum(CASE
+            WHEN above.has_consent = 0 AND EXISTS (
+              SELECT 1
+              FROM applications other
+              JOIN competitions_core other_competition
+                ON other_competition.id = other.competition_id
+              WHERE other.applicant_id = above.applicant_id
+                AND other.competition_id <> above.competition_id
+                AND other.has_consent = 1
+                AND other_competition.campaign_id = c.campaign_id
+            ) THEN 1 ELSE 0 END), 0) AS consent_elsewhere
+        FROM target t
+        JOIN competitions_core c ON c.id = t.competition_id
+        LEFT JOIN universities u ON u.id = c.university_id
+        LEFT JOIN programs p ON p.id = c.program_id
+        LEFT JOIN applications above
+          ON above.competition_id = t.competition_id
+         AND above.ordinal < t.ordinal
+        GROUP BY t.competition_id
+        ORDER BY t.ordinal, t.competition_id
+        """,
+        (applicant_id, campaign_id, limit + 1, offset),
+    ).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = _result_items(rows)
     return {
         "found": bool(items),
         "campaign_year": year,
@@ -252,18 +298,42 @@ def competition_details(
     placeholders = ",".join("?" for _ in competition_ids)
     rows = conn.execute(
         f"""
-        SELECT c.id, u.name AS university, p.name AS program, c.seats,
-               a.ordinal AS position, a.competition_priority AS priority
-        FROM applicants ap
-        JOIN applications a ON a.applicant_id = ap.id
-        JOIN competitions_core c ON c.id = a.competition_id
+        WITH target AS (
+          SELECT a.competition_id, a.ordinal, a.competition_priority,
+                 a.score_total, a.status
+          FROM applicants ap
+          JOIN applications a ON a.applicant_id = ap.id
+          JOIN competitions_core c ON c.id = a.competition_id
+          WHERE ap.applicant_id = ?
+            AND c.campaign_id = ?
+            AND c.id IN ({placeholders})
+        )
+        SELECT t.*, c.seats, c.study_form, c.quota_type,
+               c.education_level, c.city, u.name AS university,
+               p.name AS program, count(above.id) AS total_before,
+               coalesce(sum(CASE WHEN above.has_consent = 1 THEN 1 ELSE 0 END), 0)
+                 AS consent_here,
+               coalesce(sum(CASE
+                 WHEN above.has_consent = 0 AND EXISTS (
+                   SELECT 1
+                   FROM applications other
+                   JOIN competitions_core other_competition
+                     ON other_competition.id = other.competition_id
+                   WHERE other.applicant_id = above.applicant_id
+                     AND other.competition_id <> above.competition_id
+                     AND other.has_consent = 1
+                     AND other_competition.campaign_id = c.campaign_id
+                 ) THEN 1 ELSE 0 END), 0) AS consent_elsewhere
+        FROM target t
+        JOIN competitions_core c ON c.id = t.competition_id
         LEFT JOIN universities u ON u.id = c.university_id
         LEFT JOIN programs p ON p.id = c.program_id
-        WHERE ap.applicant_id = ?
-          AND c.campaign_id = ?
-          AND c.id IN ({placeholders})
-        ORDER BY a.ordinal
+        LEFT JOIN applications above
+          ON above.competition_id = t.competition_id
+         AND above.ordinal < t.ordinal
+        GROUP BY t.competition_id
+        ORDER BY t.ordinal, t.competition_id
         """,
         (applicant_id, campaign_id, *competition_ids),
     ).fetchall()
-    return [dict(row) for row in rows]
+    return _result_items(rows)
