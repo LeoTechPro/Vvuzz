@@ -19,9 +19,11 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/int/vvuzz/vuzonline_2025_norm.vds.sqlite
-ReadWritePaths=-/int/vvuzz/vuzonline_2025_norm.vds.sqlite-wal
-ReadWritePaths=-/int/vvuzz/vuzonline_2025_norm.vds.sqlite-shm
+ReadWritePaths=/int/vvuzz
+ReadOnlyPaths=/int/vvuzz/app.py /int/vvuzz/vvuzz_public /int/vvuzz/migrations
+ReadOnlyPaths=/int/vvuzz/deploy /int/vvuzz/docs /int/vvuzz/tests
+ReadOnlyPaths=/int/vvuzz/requirements.txt /int/vvuzz/requirements.lock
+InaccessiblePaths=/int/vvuzz/.git
 
 [Install]
 WantedBy=multi-user.target

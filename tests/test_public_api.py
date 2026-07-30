@@ -241,3 +241,32 @@ def test_legacy_bridge_invalidates_cached_lookup(migrated_db):
         json={"year": 2026, "applicant_id": "4150096"},
     ).json()
     assert len(second["results"]) == len(first["results"]) + 1
+
+    conn = sqlite3.connect(migrated_db)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "UPDATE applications SET ordinal=9 WHERE competition_id=? AND applicant_id=?",
+        (competition_id, applicant_id),
+    )
+    conn.commit()
+    refresh_legacy_campaigns(
+        conn,
+        competition_ids=[competition_id],
+        payload={
+            "run_id": "legacy-run",
+            "source_key": "legacy-source",
+            "fetched_at": "2026-07-30T15:31:00+00:00",
+            "competitions": [],
+        },
+    )
+    conn.close()
+    repeated = client.post(
+        "/api/public/lookup",
+        json={"year": 2026, "applicant_id": "4150096"},
+    ).json()
+    changed = next(
+        item
+        for item in repeated["results"]
+        if item["competition_id"] == competition_id
+    )
+    assert changed["position"] == 9

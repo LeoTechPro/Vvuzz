@@ -254,7 +254,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             campaign = campaign_for_year(conn, year)
             if campaign is None:
                 raise HTTPException(status_code=404, detail="Кампания не найдена")
-            marker = str(campaign["snapshot_id"] or campaign["freshness_at"] or "none")
+            marker = (
+                f"{campaign['snapshot_id'] or 'none'}:"
+                f"{campaign['freshness_at'] or 'none'}"
+            )
             cache_key = app.state.lookup_cache.make_key(
                 year, applicant_id, f"{marker}:{offset}"
             )

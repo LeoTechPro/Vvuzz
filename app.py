@@ -1239,6 +1239,10 @@ class Handler(BaseHTTPRequestHandler):
         competition_ids = []
         errors = []
         with db_connect() as conn:
+            public_archive_enabled = any(
+                row["name"] == "campaign_id"
+                for row in conn.execute("PRAGMA table_info(competitions_core)")
+            )
             conn.execute(
                 """
                 INSERT INTO ingest_runs(run_id, source, started_at, updated_at, status, config_json)
@@ -1252,7 +1256,38 @@ class Handler(BaseHTTPRequestHandler):
                     source_path = comp["source_path"]
                     program_id = get_or_create_name(conn, "programs", comp.get("program"))
                     university_id = get_or_create_name(conn, "universities", comp.get("university"))
-                    existing = conn.execute("SELECT id FROM competitions_core WHERE source_path = ?", (source_path,)).fetchone()
+                    existing = conn.execute(
+                        (
+                            "SELECT id, campaign_id FROM competitions_core "
+                            "WHERE source_path = ?"
+                            if public_archive_enabled
+                            else "SELECT id FROM competitions_core WHERE source_path = ?"
+                        ),
+                        (source_path,),
+                    ).fetchone()
+                    if public_archive_enabled:
+                        campaign_id = (
+                            existing["campaign_id"]
+                            if existing
+                            else conn.execute(
+                                """
+                                SELECT id FROM campaigns
+                                WHERE year = CASE
+                                  WHEN lower(?) LIKE '%2026%' THEN 2026
+                                  ELSE 2025
+                                END
+                                """,
+                                (source_path,),
+                            ).fetchone()["id"]
+                        )
+                        campaign_status = conn.execute(
+                            "SELECT status FROM campaigns WHERE id=?",
+                            (campaign_id,),
+                        ).fetchone()["status"]
+                        if campaign_status == "final":
+                            raise ValueError(
+                                "legacy ingest cannot modify a final campaign"
+                            )
                     applications = comp.get("applications") or []
                     values = (
                         source_path,
@@ -1320,7 +1355,7 @@ class Handler(BaseHTTPRequestHandler):
                 (run_id, payload.get("source_key"), payload.get("payload_sha256"), payload.get("fetched_at"), now_iso(), len(competitions), inserted_apps + updated_apps, len(errors)),
             )
             conn.commit()
-            if not errors:
+            if competition_ids:
                 from vvuzz_public.ingest import refresh_legacy_campaigns
 
                 refresh_legacy_campaigns(

@@ -216,7 +216,11 @@ def refresh_legacy_campaigns(
     timestamp = now_iso()
     snapshot_at = str(payload.get("fetched_at") or timestamp)
     source_key = f"legacy:{payload.get('source_key') or 'batch'}"
-    run_id = f"legacy:{payload.get('run_id') or payload_digest(payload)}"
+    payload_sha256 = payload_digest(payload)
+    run_id = (
+        f"legacy:{payload.get('run_id') or 'batch'}:"
+        f"{payload_sha256[:16]}"
+    )
     snapshot_ids = []
     for campaign in campaigns:
         if campaign["status"] == "final":
@@ -255,7 +259,7 @@ def refresh_legacy_campaigns(
                 totals[0],
                 totals[1],
                 totals[2],
-                payload_digest(payload),
+                payload_sha256,
                 timestamp,
                 timestamp,
             ),
