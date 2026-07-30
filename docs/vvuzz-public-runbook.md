@@ -141,7 +141,9 @@ Latency проверяется напрямую на beta upstream, чтобы N
 25 одновременных публичных поисков проверяются отдельно через `/beta`. Для
 этого у lookup и competition разные Nginx-зоны: burst не складывается между
 двумя запросами одного поиска, но устойчивый lookup-rate остаётся 10 запросов
-в минуту и сдерживает enumeration.
+в минуту и сдерживает enumeration. Одновременно скрипт получает
+`BEGIN IMMEDIATE`, удерживает его 250 мс и откатывает: это проверяет доступность
+того же SQLite write-lock, который нужен ingest, без сохранения тестовых строк.
 
 ```bash
 /int/.runtime/vvuzz-public/venv/bin/python \
@@ -150,6 +152,7 @@ Latency проверяется напрямую на beta upstream, чтобы N
   --base-url https://vvuzz.intdata.pro/beta \
   --year 2026 \
   --concurrency 25 \
+  --db-path /int/.runtime/vvuzz-public/data/vuzonline_2025_norm.vds.sqlite \
   --ids-file /int/.tmp/codex-agent/vvuzz-808-performance-ids.txt
 ```
 

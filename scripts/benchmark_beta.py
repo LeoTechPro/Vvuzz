@@ -7,7 +7,9 @@ import argparse
 import concurrent.futures
 import json
 import math
+import sqlite3
 import statistics
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -168,6 +170,48 @@ def first_screen_seconds(
     return time.perf_counter() - started, ok
 
 
+def concurrent_first_screen(
+    barrier: threading.Barrier,
+    base_url: str,
+    *,
+    year: int,
+    applicant_id: str,
+    timeout: float,
+) -> tuple[float, bool]:
+    barrier.wait()
+    return first_screen_seconds(
+        base_url,
+        year=year,
+        applicant_id=applicant_id,
+        timeout=timeout,
+    )
+
+
+def ingest_lock_probe(
+    barrier: threading.Barrier,
+    db_path: Path,
+    *,
+    timeout: float,
+    hold_seconds: float = 0.25,
+) -> tuple[float, bool]:
+    """Acquire the same main-DB write lock as ingest, then roll it back."""
+    barrier.wait()
+    started = time.perf_counter()
+    conn = sqlite3.connect(db_path, timeout=timeout)
+    try:
+        conn.execute(f"PRAGMA busy_timeout={max(1, int(timeout * 1000))}")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("SELECT count(*) FROM campaigns").fetchone()
+        time.sleep(hold_seconds)
+        conn.rollback()
+        return time.perf_counter() - started, True
+    except sqlite3.Error:
+        conn.rollback()
+        return time.perf_counter() - started, False
+    finally:
+        conn.close()
+
+
 def full_result_seconds(
     base_url: str,
     *,
@@ -218,6 +262,14 @@ def main() -> int:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--ids-file", type=Path, required=True)
+    parser.add_argument(
+        "--db-path",
+        type=Path,
+        help=(
+            "Required for parallel/all: local beta SQLite used by the "
+            "rollback-only concurrent ingest lock probe"
+        ),
+    )
     parser.add_argument("--samples", type=int, default=10)
     parser.add_argument("--concurrency", type=int, default=25)
     parser.add_argument("--timeout", type=float, default=10.0)
@@ -233,19 +285,25 @@ def main() -> int:
     args = parser.parse_args()
     if args.samples < 1 or args.concurrency < 1:
         parser.error("samples and concurrency must be positive")
+    if args.mode in {"parallel", "all"} and args.db_path is None:
+        parser.error("--db-path is required for parallel and all modes")
 
     applicant_ids = validated_ids(args.ids_file)
     errors: list[str] = []
     parallel_errors: list[str] = []
 
     parallel_durations: list[float] = []
+    ingest_probe_seconds: float | None = None
+    ingest_probe_ok: bool | None = None
     if args.mode in {"parallel", "all"}:
+        barrier = threading.Barrier(args.concurrency + 1)
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=args.concurrency
+            max_workers=args.concurrency + 1
         ) as executor:
             futures = [
                 executor.submit(
-                    first_screen_seconds,
+                    concurrent_first_screen,
+                    barrier,
                     args.base_url,
                     year=args.year,
                     applicant_id=applicant_ids[index % len(applicant_ids)],
@@ -253,6 +311,12 @@ def main() -> int:
                 )
                 for index in range(args.concurrency)
             ]
+            ingest_future = executor.submit(
+                ingest_lock_probe,
+                barrier,
+                args.db_path,
+                timeout=args.timeout,
+            )
             for future in futures:
                 try:
                     duration, ok = future.result()
@@ -261,6 +325,12 @@ def main() -> int:
                         parallel_errors.append("parallel_search_http_error")
                 except Exception as exc:  # bounded summary; no request data
                     parallel_errors.append(type(exc).__name__)
+            try:
+                ingest_probe_seconds, ingest_probe_ok = ingest_future.result()
+                if not ingest_probe_ok:
+                    parallel_errors.append("ingest_lock_probe_error")
+            except Exception as exc:
+                parallel_errors.append(type(exc).__name__)
         errors.extend(parallel_errors)
 
     homepage_headers = []
@@ -332,7 +402,13 @@ def main() -> int:
         "extreme_full_result": {
             "seconds": extreme_duration,
             "results": extreme_results,
+            "minimum_results": 500,
             "ok": extreme_ok,
+        },
+        "concurrent_ingest_lock_probe": {
+            "seconds": ingest_probe_seconds,
+            "ok": ingest_probe_ok,
+            "transaction_rolled_back": ingest_probe_ok is True,
         },
     }
     thresholds: dict[str, bool] = {}
@@ -355,12 +431,19 @@ def main() -> int:
                     extreme_ok is True
                     and extreme_duration is not None
                     and extreme_duration <= 5.0
+                    and extreme_results is not None
+                    and extreme_results >= 500
                 ),
             }
         )
     if args.mode in {"parallel", "all"}:
         thresholds["parallel_without_errors"] = (
             not parallel_errors and len(parallel_durations) == args.concurrency
+        )
+        thresholds["ingest_lock_probe_le_1_5"] = (
+            ingest_probe_ok is True
+            and ingest_probe_seconds is not None
+            and ingest_probe_seconds <= 1.5
         )
     report["thresholds"] = thresholds
     report["error_count"] = len(errors)

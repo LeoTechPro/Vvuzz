@@ -1,8 +1,15 @@
+import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
 
-from scripts.benchmark_beta import percentile, sanitized_base_url, validated_ids
+from scripts.benchmark_beta import (
+    ingest_lock_probe,
+    percentile,
+    sanitized_base_url,
+    validated_ids,
+)
 
 
 def test_percentile_uses_nearest_rank() -> None:
@@ -29,3 +36,23 @@ def test_sanitized_base_url_removes_credentials_query_and_fragment() -> None:
         sanitized_base_url("https://secret:user@example.test:8443/beta/?q=1#x")
         == "https://example.test:8443/beta"
     )
+
+
+def test_ingest_lock_probe_rolls_back_without_mutating_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "probe.sqlite"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE campaigns(id INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO campaigns DEFAULT VALUES")
+        conn.commit()
+
+    duration, ok = ingest_lock_probe(
+        threading.Barrier(1),
+        db_path,
+        timeout=1.0,
+        hold_seconds=0,
+    )
+
+    assert ok is True
+    assert duration >= 0
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT count(*) FROM campaigns").fetchone()[0] == 1
