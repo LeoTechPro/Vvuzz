@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Архив кампаний — Vvuzz{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <span class="eyebrow">Архив данных</span>
+  <h1>Кампании можно сравнивать по годам</h1>
+  <p>В архиве — обезличенные агрегаты и поиск только собственного ID. Каталога абитуриентов здесь нет.</p>
+</section>
+
+<section class="archive-layout">
+  <div class="year-list" aria-label="Доступные кампании">
+    {% for campaign in campaigns %}
+    <button class="year-button" type="button" data-year="{{ campaign.year }}" {% if loop.first %}aria-current="true"{% endif %}>
+      <strong>{{ campaign.year }}</strong>
+      <span>{{ "текущая" if campaign.status == "active" else "финальная" }}</span>
+    </button>
+    {% endfor %}
+  </div>
+  <div id="archive-overview" class="archive-overview" aria-live="polite">
+    <p>Загружаем обзор кампании…</p>
+  </div>
+</section>
+
+<section class="archive-self-search">
+  <h2>Найти себя в выбранном году</h2>
+  <p>Поиск использует тот же приватный POST-запрос: ID не попадает в адрес страницы.</p>
+  <a class="secondary-action" href="{{ base_path }}/">Перейти к поиску</a>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ base_path }}/static/app.js" defer></script>{% endblock %}

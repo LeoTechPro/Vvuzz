@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Результат — Vvuzz{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <a class="back-link" href="{{ base_path }}/">← Новый поиск</a>
+  <span class="eyebrow">Кампания {{ result.campaign_year }}</span>
+  <h1>{{ "Ваши конкурсы" if result.found else "ID не найден в снимке" }}</h1>
+  <p>{{ result.warning }}</p>
+</section>
+{% if result.found %}
+  {% for risk, title in [("stable", "Устойчивое положение"), ("borderline", "Пограничная ситуация"), ("risk", "Высокий риск")] %}
+  {% set group = result.results | selectattr("risk", "equalto", risk) | list %}
+  {% if group %}
+  <section class="result-group result-group--{{ risk }}">
+    <h2>{{ title }} <span>{{ group | length }}</span></h2>
+    {% for item in group %}
+    <article class="competition">
+      <header><span class="risk-label">{{ item.risk_label }}</span><span>Позиция {{ item.position }} из {{ item.places or "—" }} мест</span></header>
+      <h3>{{ item.university }}</h3>
+      <p>{{ item.program }}</p>
+      <dl class="metric-row">
+        <div><dt>Эффективно выше</dt><dd>{{ item.effective_competitors }}</dd></div>
+        <div><dt>Согласие здесь</dt><dd>{{ item.consent_here }}</dd></div>
+        <div><dt>В другом месте</dt><dd>{{ item.consent_elsewhere }}</dd></div>
+        <div><dt>Без согласия</dt><dd>{{ item.no_consent }}</dd></div>
+      </dl>
+      <details><summary>Как рассчитано</summary><p>{{ item.formula }}</p></details>
+    </article>
+    {% endfor %}
+  </section>
+  {% endif %}
+  {% endfor %}
+{% endif %}
+{% endblock %}

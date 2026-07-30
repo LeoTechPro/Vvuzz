@@ -1,0 +1,1 @@
+"""Vvuzz database migrations."""

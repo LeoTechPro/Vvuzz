@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% block title %}Vvuzz{% endblock %}</title>
+  <link rel="stylesheet" href="{{ base_path }}/static/styles.css">
+  {% block head %}{% endblock %}
+</head>
+<body data-base-path="{{ base_path }}" data-page="{{ page }}">
+  <a class="skip-link" href="#content">К содержанию</a>
+  <header class="site-header">
+    <a class="brand" href="{{ base_path }}/" aria-label="Vvuzz — на главную">
+      <span class="brand-mark" aria-hidden="true">V</span>
+      <span>Vvuzz</span>
+    </a>
+    <nav aria-label="Основная навигация">
+      <a {% if page == "home" %}aria-current="page"{% endif %} href="{{ base_path }}/">Проверить положение</a>
+      <a {% if page == "archive" %}aria-current="page"{% endif %} href="{{ base_path }}/archive">Архив</a>
+    </nav>
+  </header>
+  <main id="content">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <p>Vvuzz использует открытые конкурсные данные. Оценки не являются гарантией зачисления.</p>
+    <a href="{{ base_path }}/manage">Вход команды</a>
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

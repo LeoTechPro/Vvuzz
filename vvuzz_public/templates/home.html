@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Vvuzz — положение в конкурсных списках{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="eyebrow">Бесплатно · без регистрации</div>
+  <h1>Поймите своё положение<br>до принятия решения</h1>
+  <p class="hero-copy">Введите ID из конкурсного списка. Покажем места, людей выше и насколько положение устойчиво по последнему доступному снимку.</p>
+
+  <form class="lookup-form" id="lookup-form" method="post" action="{{ base_path }}/lookup">
+    <div class="field campaign-field">
+      <label for="campaign-year">Кампания</label>
+      <select id="campaign-year" name="year" required>
+        {% for campaign in campaigns %}
+        <option value="{{ campaign.year }}" {% if active_campaign and campaign.year == active_campaign.year %}selected{% endif %}>
+          {{ campaign.year }} — {{ "идёт сейчас" if campaign.status == "active" else "финальный архив" }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field id-field">
+      <label for="applicant-id">Ваш ID участника</label>
+      <input id="applicant-id" name="applicant_id" inputmode="numeric" pattern="[0-9]{4,20}" maxlength="20" autocomplete="off" placeholder="Например, 4150096" required>
+    </div>
+    <button class="primary-action" type="submit">Проверить положение</button>
+  </form>
+
+  {% if active_campaign %}
+  <p class="freshness">
+    Последнее обновление:
+    <time datetime="{{ active_campaign.freshness_at or '' }}">{{ active_campaign.freshness_at or "готовится" }}</time>
+  </p>
+  {% endif %}
+</section>
+
+<section class="stats-strip" aria-label="Данные кампании">
+  {% if active_campaign %}
+  <div><strong>{{ "{:,}".format(active_campaign.competition_count or 0).replace(",", " ") }}</strong><span>конкурсов</span></div>
+  <div><strong>{{ "{:,}".format(active_campaign.institution_count or 0).replace(",", " ") }}</strong><span>вузов</span></div>
+  <div><strong>{{ "{:,}".format(active_campaign.applicant_count or 0).replace(",", " ") }}</strong><span>участников в снимке</span></div>
+  {% else %}
+  <p>Агрегаты кампании ещё готовятся.</p>
+  {% endif %}
+</section>
+
+<section id="lookup-status" class="lookup-status" aria-live="polite" aria-atomic="true"></section>
+<section id="lookup-results" class="results" aria-label="Результаты поиска"></section>
+<aside id="compare-tray" class="compare-tray" aria-label="Сравнение конкурсов" hidden>
+  <div>
+    <span class="eyebrow">Локальное сравнение</span>
+    <strong id="compare-count">0 из 5</strong>
+  </div>
+  <button id="open-compare" class="secondary-action" type="button">Сравнить</button>
+  <button id="clear-history" class="text-action" type="button">Очистить историю</button>
+</aside>
+
+<section class="method">
+  <div>
+    <span class="section-number">01</span>
+    <h2>Не процент, а положение</h2>
+  </div>
+  <p>Мы сопоставляем число мест с людьми выше: кто уже согласился здесь, выбрал другое место или ещё не определился. Процент остаётся подсказкой, а не обещанием.</p>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ base_path }}/static/app.js" defer></script>{% endblock %}
