@@ -10,7 +10,7 @@ WorkingDirectory=/int/vvuzz
 Environment=PYTHONUNBUFFERED=1
 Environment=VVUZZ_ENV=production
 Environment=VVUZZ_BASE_PATH=/beta
-Environment=VVUZZ_DB_PATH=/int/vvuzz/vuzonline_2025_norm.vds.sqlite
+Environment=VVUZZ_DB_PATH=/int/.runtime/vvuzz-public/data/vuzonline_2025_norm.vds.sqlite
 EnvironmentFile=/int/vvuzz/.env.public
 ExecStart=/int/.runtime/vvuzz-public/venv/bin/python -m uvicorn vvuzz_public.main:app --host 127.0.0.1 --port 9186 --workers 1 --no-access-log
 Restart=on-failure
@@ -19,16 +19,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/int/vvuzz
-ReadOnlyPaths=/int/vvuzz/app.py /int/vvuzz/chance.py
-ReadOnlyPaths=/int/vvuzz/gosuslugi_parser.py /int/vvuzz/import_zip_to_norm_sqlite.py
-ReadOnlyPaths=/int/vvuzz/import_zip_to_sqlite.py /int/vvuzz/normalize_sqlite.py
-ReadOnlyPaths=/int/vvuzz/vvuzz_public /int/vvuzz/migrations
-ReadOnlyPaths=/int/vvuzz/deploy /int/vvuzz/docs /int/vvuzz/tests
-ReadOnlyPaths=/int/vvuzz/requirements.txt /int/vvuzz/requirements.lock
-ReadOnlyPaths=/int/vvuzz/.env /int/vvuzz/.env.public
-ReadOnlyPaths=/int/vvuzz/README.md /int/vvuzz/AGENTS.md
-ReadOnlyPaths=/int/vvuzz/.gitignore /int/vvuzz/.gitattributes
+ReadWritePaths=/int/.runtime/vvuzz-public/data
 InaccessiblePaths=/int/vvuzz/.git
 
 [Install]
