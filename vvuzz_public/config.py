@@ -21,7 +21,10 @@ class Settings:
     session_idle_seconds: int = 60 * 60
     lookup_timing_floor_ms: int = 80
     lookup_limit: int = 50
-    rate_limit_requests: int = 30
+    # Application-level backstop. Nginx applies the stricter, route-specific
+    # public limits; this ceiling must still allow the approved 25-client
+    # acceptance run without turning the benchmark itself into a 429 source.
+    rate_limit_requests: int = 120
     rate_limit_window_seconds: int = 60
 
     @classmethod

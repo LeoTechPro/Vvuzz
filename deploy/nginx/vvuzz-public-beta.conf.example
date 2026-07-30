@@ -5,7 +5,7 @@ location = /beta {
 }
 
 location = /beta/api/public/lookup {
-    limit_req zone=vvuzz_public_lookup burst=5 nodelay;
+    limit_req zone=vvuzz_public_lookup burst=25 nodelay;
     access_log /var/log/nginx/vvuzz-public.access.log vvuzz_public;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -16,7 +16,7 @@ location = /beta/api/public/lookup {
 }
 
 location = /beta/lookup {
-    limit_req zone=vvuzz_public_lookup burst=5 nodelay;
+    limit_req zone=vvuzz_public_lookup burst=25 nodelay;
     access_log /var/log/nginx/vvuzz-public.access.log vvuzz_public;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -27,7 +27,7 @@ location = /beta/lookup {
 }
 
 location = /beta/api/public/competition {
-    limit_req zone=vvuzz_public_lookup burst=5 nodelay;
+    limit_req zone=vvuzz_public_detail burst=25 nodelay;
     access_log /var/log/nginx/vvuzz-public.access.log vvuzz_public;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;

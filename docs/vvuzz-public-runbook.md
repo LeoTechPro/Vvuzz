@@ -119,7 +119,44 @@ python3 -m vvuzz_public.cli create-admin --username '<operator>'
 
 Старый процесс на `127.0.0.1:9176` не останавливается.
 
-## 6. Ingest v2 transition
+## 6. Performance acceptance
+
+Тест выполняется только после отдельного approval на beta/runtime. Файл ID
+хранится в task scratch, не коммитится и содержит по одному ID на строку:
+обычные, отсутствующий, а последней строкой — экстремальный ID с 500+
+конкурсами. Скрипт не печатает сырые ID и возвращает только агрегаты.
+
+Latency проверяется напрямую на beta upstream, чтобы Nginx rate limit не
+искажал последовательные замеры:
+
+```bash
+/int/.runtime/vvuzz-public/venv/bin/python \
+  /int/vvuzz/scripts/benchmark_beta.py \
+  --mode performance \
+  --base-url http://127.0.0.1:9186 \
+  --year 2026 \
+  --ids-file /int/.tmp/codex-agent/vvuzz-808-performance-ids.txt
+```
+
+25 одновременных публичных поисков проверяются отдельно через `/beta`. Для
+этого у lookup и competition разные Nginx-зоны: burst не складывается между
+двумя запросами одного поиска, но устойчивый lookup-rate остаётся 10 запросов
+в минуту и сдерживает enumeration.
+
+```bash
+/int/.runtime/vvuzz-public/venv/bin/python \
+  /int/vvuzz/scripts/benchmark_beta.py \
+  --mode parallel \
+  --base-url https://vvuzz.intdata.pro/beta \
+  --year 2026 \
+  --concurrency 25 \
+  --ids-file /int/.tmp/codex-agent/vvuzz-808-performance-ids.txt
+```
+
+Оба JSON-отчёта сохраняются как evidence Issue #808. После проверки файл ID
+остаётся task scratch и удаляется только по отдельному cleanup approval.
+
+## 7. Ingest v2 transition
 
 Новый endpoint требует:
 
@@ -136,7 +173,7 @@ python3 -m vvuzz_public.cli create-admin --username '<operator>'
 Legacy `/api/ingest/batch` остаётся направлен на старый процесс до отдельного
 обновления и проверки парсера.
 
-## 7. Production gate
+## 8. Production gate
 
 До переключения обязательны:
 
@@ -147,7 +184,7 @@ Legacy `/api/ingest/batch` остаётся направлен на старый
 - owner-решение о публичности псевдонимного ID;
 - точное approval на DB apply, systemd и Nginx.
 
-## 8. Rollback
+## 9. Rollback
 
 Rollback runtime не требует отката DB:
 
