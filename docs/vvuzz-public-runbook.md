@@ -59,12 +59,21 @@ python3 -m vvuzz_public.cli create-admin --username '<operator>'
 
 После approval:
 
-1. Установить `deploy/systemd/vvuzz-public-beta.service`.
-2. Добавить проверенные директивы из
+1. Создать отдельное окружение runtime и установить зафиксированные
+   зависимости:
+
+   ```bash
+   python3 -m venv /int/.runtime/vvuzz-public/venv
+   /int/.runtime/vvuzz-public/venv/bin/pip install \
+     --requirement /int/vvuzz/requirements.txt
+   ```
+
+2. Установить `deploy/systemd/vvuzz-public-beta.service`.
+3. Добавить проверенные директивы из
    `deploy/nginx/vvuzz-public-beta.conf.example` в TLS server.
-3. Выполнить `nginx -t`, затем разрешённые reload/start.
-4. Проверить `/beta/healthz`, `/beta`, `/beta/archive` и `/beta/manage`.
-5. Убедиться, что формат access log записывает `$uri`, а не `$request_uri`, и
+4. Выполнить `nginx -t`, затем разрешённые reload/start.
+5. Проверить `/beta/healthz`, `/beta`, `/beta/archive` и `/beta/manage`.
+6. Убедиться, что формат access log записывает `$uri`, а не `$request_uri`, и
    не содержит тела запроса.
 
 Старый процесс на `127.0.0.1:9176` не останавливается.

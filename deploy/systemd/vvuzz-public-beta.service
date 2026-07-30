@@ -12,7 +12,7 @@ Environment=VVUZZ_ENV=production
 Environment=VVUZZ_BASE_PATH=/beta
 Environment=VVUZZ_DB_PATH=/int/vvuzz/vuzonline_2025_norm.vds.sqlite
 EnvironmentFile=/int/vvuzz/.env.public
-ExecStart=/usr/bin/python3 -m uvicorn vvuzz_public.main:app --host 127.0.0.1 --port 9186 --workers 1 --no-access-log
+ExecStart=/int/.runtime/vvuzz-public/venv/bin/python -m uvicorn vvuzz_public.main:app --host 127.0.0.1 --port 9186 --workers 1 --no-access-log
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
