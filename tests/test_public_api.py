@@ -112,3 +112,54 @@ def test_25_parallel_public_lookups_complete_without_errors(migrated_db):
     with ThreadPoolExecutor(max_workers=25) as pool:
         statuses = list(pool.map(lookup_once, range(25)))
     assert statuses == [200] * 25
+
+
+def test_lookup_paginates_more_than_50_competitions(migrated_db):
+    conn = sqlite3.connect(migrated_db)
+    campaign_id = conn.execute("SELECT id FROM campaigns WHERE year=2026").fetchone()[0]
+    applicant_id = conn.execute(
+        "SELECT id FROM applicants WHERE applicant_id='4150096'"
+    ).fetchone()[0]
+    for index in range(10, 65):
+        conn.execute(
+            """
+            INSERT INTO competitions_core(
+              id, source_path, file_name, program_id, education_level, city,
+              university_id, study_form, quota_type, seats, path_json,
+              row_count, imported_at, campaign_id
+            ) VALUES (?, ?, ?, 1, 'Бакалавриат', 'Москва', 1, 'Очная',
+                      'Общий конкурс', 10, '[]', 1, ?, ?)
+            """,
+            (
+                index,
+                f"gosuslugi2026/competition/{index}",
+                f"{index}.json",
+                "2026-07-30T12:00:00+00:00",
+                campaign_id,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO applications(
+              competition_id, applicant_id, ordinal, competition_priority,
+              consent_text, has_consent
+            ) VALUES (?, ?, 1, 1, 'Нет', 0)
+            """,
+            (index, applicant_id),
+        )
+    conn.commit()
+    conn.close()
+
+    client = client_for(migrated_db)
+    first = client.post(
+        "/api/public/lookup",
+        json={"year": 2026, "applicant_id": "4150096", "offset": 0},
+    ).json()
+    second = client.post(
+        "/api/public/lookup",
+        json={"year": 2026, "applicant_id": "4150096", "offset": first["next_offset"]},
+    ).json()
+    assert len(first["results"]) == 50
+    assert first["truncated"] is True
+    assert len(second["results"]) == 6
+    assert second["truncated"] is False

@@ -138,6 +138,62 @@ def refresh_stats(conn: sqlite3.Connection, campaign_id: int, timestamp: str) ->
     )
 
 
+def ensure_baseline_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    campaign_id: int,
+    year: int,
+    campaign_status: str,
+    timestamp: str,
+) -> int:
+    stats = conn.execute(
+        "SELECT * FROM campaign_stats WHERE campaign_id=?", (campaign_id,)
+    ).fetchone()
+    if stats is None:
+        raise RuntimeError(f"campaign_stats missing for {year}")
+    snapshot_status = "final" if campaign_status == "final" else "ready"
+    cursor = conn.execute(
+        """
+        INSERT INTO snapshots(
+          campaign_id, run_id, source_key, snapshot_at, status,
+          competition_count, application_count, applicant_count,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(campaign_id, run_id, source_key) DO UPDATE SET
+          snapshot_at=excluded.snapshot_at,
+          status=excluded.status,
+          competition_count=excluded.competition_count,
+          application_count=excluded.application_count,
+          applicant_count=excluded.applicant_count,
+          updated_at=excluded.updated_at
+        RETURNING id
+        """,
+        (
+            campaign_id,
+            f"migration-baseline-{year}",
+            f"archive-{year}",
+            stats["freshness_at"] or timestamp,
+            snapshot_status,
+            stats["competition_count"],
+            stats["application_count"],
+            stats["applicant_count"],
+            timestamp,
+            timestamp,
+        ),
+    )
+    snapshot_id = cursor.fetchone()[0]
+    conn.execute(
+        "UPDATE campaign_stats SET snapshot_id=? WHERE campaign_id=?",
+        (snapshot_id, campaign_id),
+    )
+    if campaign_status == "final":
+        conn.execute(
+            "UPDATE campaigns SET final_snapshot_id=?, updated_at=? WHERE id=?",
+            (snapshot_id, timestamp, campaign_id),
+        )
+    return snapshot_id
+
+
 def apply(db_path: Path, *, with_stats: bool) -> dict:
     report = preflight(db_path)
     if report["integrity_check"] != "ok":
@@ -160,6 +216,25 @@ def apply(db_path: Path, *, with_stats: bool) -> dict:
             )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_competitions_core_campaign ON competitions_core(campaign_id, id)"
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_competitions_core_campaign_after_insert
+            AFTER INSERT ON competitions_core
+            WHEN NEW.campaign_id IS NULL
+            BEGIN
+              UPDATE competitions_core
+              SET campaign_id = (
+                SELECT id
+                FROM campaigns
+                WHERE year = CASE
+                  WHEN lower(NEW.source_path) LIKE '%2026%' THEN 2026
+                  ELSE 2025
+                END
+              )
+              WHERE id = NEW.id;
+            END
+            """
         )
         timestamp = now_iso()
         conn.execute(
@@ -191,13 +266,24 @@ def apply(db_path: Path, *, with_stats: bool) -> dict:
             WHERE campaign_id IS NULL
             """
         )
-        if with_stats:
-            for row in conn.execute("SELECT id FROM campaigns ORDER BY year"):
-                refresh_stats(conn, row["id"], timestamp)
         after = counts(conn)
         if after != report["counts"]:
             raise RuntimeError(f"Count parity failed: before={report['counts']} after={after}")
         conn.commit()
+        if with_stats:
+            campaign_rows = list(
+                conn.execute("SELECT id, year, status FROM campaigns ORDER BY year")
+            )
+            for campaign in campaign_rows:
+                refresh_stats(conn, campaign["id"], timestamp)
+                ensure_baseline_snapshot(
+                    conn,
+                    campaign_id=campaign["id"],
+                    year=campaign["year"],
+                    campaign_status=campaign["status"],
+                    timestamp=timestamp,
+                )
+                conn.commit()
         return {**report, "after_counts": after, "stats_refreshed": with_stats}
     except Exception:
         conn.rollback()

@@ -113,10 +113,20 @@ def test_ingest_v2_is_idempotent(migrated_db):
     assert second.json()["duplicate"] is True
     assert first.json()["snapshot_id"] == second.json()["snapshot_id"]
 
+    finalized_payload = {**payload, "finalize_campaign": True}
+    finalized = client.post(
+        "/api/ingest/v2/batch", json=finalized_payload, headers=headers
+    )
+    assert finalized.status_code == 200
+    assert finalized.json()["duplicate"] is True
+
     conn = sqlite3.connect(migrated_db)
     assert conn.execute(
         "SELECT count(*) FROM snapshots WHERE run_id='run-test-1' AND source_key='source-test-1'"
     ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT status FROM campaigns WHERE year=2026"
+    ).fetchone()[0] == "final"
     conn.close()
 
 

@@ -42,6 +42,18 @@ location = /beta/manage/login {
     proxy_pass http://127.0.0.1:9186/manage/login;
 }
 
+location = /api/ingest/v2/batch {
+    client_max_body_size 25m;
+    access_log /var/log/nginx/vvuzz-ingest-v2.access.log vvuzz_public;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_read_timeout 120s;
+    proxy_pass http://127.0.0.1:9186/api/ingest/v2/batch;
+}
+
 location /beta/ {
     access_log /var/log/nginx/vvuzz-public.access.log vvuzz_public;
     proxy_set_header Host $host;
@@ -57,4 +69,4 @@ location /beta/ {
 }
 
 # The existing location for /api/ingest/batch continues to use port 9176.
-# Route /beta/api/ingest/v2/batch to port 9186 only after parser coordination.
+# Enable /api/ingest/v2/batch only after parser coordination.

@@ -4,7 +4,7 @@ import asyncio
 import datetime as dt
 import hmac
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from pathlib import Path
 from threading import Lock
 
@@ -43,19 +43,22 @@ class SlidingRateLimiter:
         self.key = key
         self.requests = requests
         self.window_seconds = window_seconds
-        self._events: dict[str, deque[float]] = defaultdict(deque)
+        self._events: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = Lock()
 
     def allow(self, identity: str) -> bool:
         now = time.monotonic()
         hashed = digest(identity, self.key)
         with self._lock:
-            events = self._events[hashed]
+            events = self._events.setdefault(hashed, deque())
+            self._events.move_to_end(hashed)
             while events and events[0] <= now - self.window_seconds:
                 events.popleft()
             if len(events) >= self.requests:
                 return False
             events.append(now)
+            while len(self._events) > 10_000:
+                self._events.popitem(last=False)
             return True
 
 
@@ -188,6 +191,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 applicant_id=applicant_id,
                 freshness=campaign["freshness_at"],
                 limit=settings.lookup_limit,
+                offset=0,
             )
         elapsed = (time.perf_counter() - started) * 1000
         remaining = settings.lookup_timing_floor_ms - elapsed
@@ -220,15 +224,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         applicant_id = valid_applicant_id(payload.get("applicant_id"))
         try:
             year = int(payload.get("year"))
+            offset = int(payload.get("offset") or 0)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail="Некорректная кампания") from exc
+        if not 0 <= offset <= 5000:
+            raise HTTPException(status_code=422, detail="Некорректное смещение")
         ensure_ready()
         with connection(settings.db_path, readonly=True) as conn:
             campaign = campaign_for_year(conn, year)
             if campaign is None:
                 raise HTTPException(status_code=404, detail="Кампания не найдена")
             marker = str(campaign["snapshot_id"] or campaign["freshness_at"] or "none")
-            cache_key = app.state.lookup_cache.make_key(year, applicant_id, marker)
+            cache_key = app.state.lookup_cache.make_key(
+                year, applicant_id, f"{marker}:{offset}"
+            )
             result = app.state.lookup_cache.get(cache_key)
             if result is None:
                 result = lookup(
@@ -238,6 +247,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     applicant_id=applicant_id,
                     freshness=campaign["freshness_at"],
                     limit=settings.lookup_limit,
+                    offset=offset,
                 )
                 app.state.lookup_cache.put(cache_key, result)
         elapsed = (time.perf_counter() - started) * 1000

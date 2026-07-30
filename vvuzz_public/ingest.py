@@ -113,6 +113,8 @@ def upsert_applications(
 
 
 def validate_payload(payload: dict) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be an object")
     required = ("campaign_year", "run_id", "source_key", "snapshot_at")
     missing = [key for key in required if not payload.get(key)]
     if missing:
@@ -124,6 +126,54 @@ def validate_payload(payload: dict) -> None:
         raise ValueError("run_id or source_key is too long")
     if not isinstance(payload.get("competitions", []), list):
         raise ValueError("competitions must be a list")
+    try:
+        snapshot_at = dt.datetime.fromisoformat(str(payload["snapshot_at"]))
+    except ValueError as exc:
+        raise ValueError("snapshot_at must be an ISO 8601 timestamp") from exc
+    if snapshot_at.tzinfo is None:
+        raise ValueError("snapshot_at must include a timezone")
+    for flag in ("refresh_stats", "finalize_campaign"):
+        if flag in payload and not isinstance(payload[flag], bool):
+            raise ValueError(f"{flag} must be a boolean")
+    for competition in payload.get("competitions", []):
+        if not isinstance(competition, dict):
+            raise ValueError("each competition must be an object")
+        source_path = str(competition.get("source_path") or "")
+        if len(source_path) > 1000:
+            raise ValueError("competition.source_path is too long")
+        if not isinstance(competition.get("applications", []), list):
+            raise ValueError("competition.applications must be a list")
+
+
+def refresh_and_finalize(
+    conn: sqlite3.Connection,
+    *,
+    campaign_id: int,
+    snapshot_id: int,
+    payload: dict,
+    timestamp: str,
+) -> str:
+    if payload.get("refresh_stats") or payload.get("finalize_campaign"):
+        refresh_stats(conn, campaign_id, timestamp)
+        conn.execute(
+            "UPDATE campaign_stats SET snapshot_id=? WHERE campaign_id=?",
+            (snapshot_id, campaign_id),
+        )
+    if payload.get("finalize_campaign"):
+        conn.execute(
+            "UPDATE snapshots SET status='final', updated_at=? WHERE id=?",
+            (timestamp, snapshot_id),
+        )
+        conn.execute(
+            """
+            UPDATE campaigns
+            SET status='final', final_snapshot_id=?, updated_at=?
+            WHERE id=?
+            """,
+            (snapshot_id, timestamp, campaign_id),
+        )
+    conn.commit()
+    return "final" if payload.get("finalize_campaign") else "ready"
 
 
 def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
@@ -143,8 +193,6 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
         campaign = conn.execute(
             "SELECT id, status FROM campaigns WHERE year = ?", (year,)
         ).fetchone()
-        if campaign["status"] == "final":
-            raise ValueError("campaign is final and cannot accept new ingest")
         duplicate = conn.execute(
             """
             SELECT id, status, competition_count, application_count, error_count
@@ -155,14 +203,25 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
         ).fetchone()
         if duplicate:
             conn.rollback()
+            final_status = duplicate["status"]
+            if payload.get("refresh_stats") or payload.get("finalize_campaign"):
+                final_status = refresh_and_finalize(
+                    conn,
+                    campaign_id=campaign["id"],
+                    snapshot_id=duplicate["id"],
+                    payload=payload,
+                    timestamp=timestamp,
+                )
             return 200, {
-                "accepted": duplicate["status"] in {"ready", "final"},
+                "accepted": final_status in {"ready", "final"},
                 "duplicate": True,
                 "snapshot_id": duplicate["id"],
                 "competitions": duplicate["competition_count"],
                 "applications": duplicate["application_count"],
                 "errors": duplicate["error_count"],
             }
+        if campaign["status"] == "final":
+            raise ValueError("campaign is final and cannot accept new ingest")
 
         cursor = conn.execute(
             """
@@ -182,6 +241,8 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
             ),
         )
         snapshot_id = cursor.lastrowid
+        if snapshot_id is None:
+            raise RuntimeError("failed to create snapshot")
         inserted = updated = 0
         batch_applicant_ids: set[str] = set()
         competitions = payload.get("competitions") or []
@@ -261,7 +322,6 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
                 (snapshot_id, competition_id, item.get("seats"), len(applications), consent_count),
             )
 
-        status = "final" if payload.get("finalize_campaign") else "ready"
         conn.execute(
             """
             UPDATE snapshots
@@ -270,7 +330,7 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
             WHERE id=?
             """,
             (
-                status,
+                "ready",
                 len(competitions),
                 inserted + updated,
                 len(batch_applicant_ids),
@@ -278,22 +338,14 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
                 snapshot_id,
             ),
         )
-        if payload.get("refresh_stats") or payload.get("finalize_campaign"):
-            refresh_stats(conn, campaign["id"], timestamp)
-            conn.execute(
-                "UPDATE campaign_stats SET snapshot_id=? WHERE campaign_id=?",
-                (snapshot_id, campaign["id"]),
-            )
-        if payload.get("finalize_campaign"):
-            conn.execute(
-                """
-                UPDATE campaigns
-                SET status='final', final_snapshot_id=?, updated_at=?
-                WHERE id=?
-                """,
-                (snapshot_id, timestamp, campaign["id"]),
-            )
         conn.commit()
+        refresh_and_finalize(
+            conn,
+            campaign_id=campaign["id"],
+            snapshot_id=snapshot_id,
+            payload=payload,
+            timestamp=timestamp,
+        )
         return 202, {
             "accepted": True,
             "duplicate": False,

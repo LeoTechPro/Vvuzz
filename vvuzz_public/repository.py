@@ -59,7 +59,16 @@ def campaigns(conn: sqlite3.Connection) -> list[dict]:
         """
         SELECT c.id, c.year, c.name, c.status, c.final_snapshot_id,
                s.competition_count, s.application_count, s.applicant_count,
-               s.institution_count, s.program_count, s.freshness_at, s.computed_at
+               s.institution_count, s.program_count,
+               COALESCE(
+                 (SELECT latest.snapshot_at
+                  FROM snapshots latest
+                  WHERE latest.campaign_id = c.id
+                    AND latest.status IN ('ready', 'final')
+                  ORDER BY latest.id DESC LIMIT 1),
+                 s.freshness_at
+               ) AS freshness_at,
+               s.computed_at
         FROM campaigns c
         LEFT JOIN campaign_stats s ON s.campaign_id = c.id
         ORDER BY c.year DESC
@@ -71,7 +80,24 @@ def campaigns(conn: sqlite3.Connection) -> list[dict]:
 def campaign_for_year(conn: sqlite3.Connection, year: int) -> sqlite3.Row | None:
     return conn.execute(
         """
-        SELECT c.*, s.freshness_at, s.computed_at, s.snapshot_id
+        SELECT c.*,
+               COALESCE(
+                 (SELECT latest.snapshot_at
+                  FROM snapshots latest
+                  WHERE latest.campaign_id = c.id
+                    AND latest.status IN ('ready', 'final')
+                  ORDER BY latest.id DESC LIMIT 1),
+                 s.freshness_at
+               ) AS freshness_at,
+               s.computed_at,
+               COALESCE(
+                 (SELECT latest.id
+                  FROM snapshots latest
+                  WHERE latest.campaign_id = c.id
+                    AND latest.status IN ('ready', 'final')
+                  ORDER BY latest.id DESC LIMIT 1),
+                 s.snapshot_id
+               ) AS snapshot_id
         FROM campaigns c
         LEFT JOIN campaign_stats s ON s.campaign_id = c.id
         WHERE c.year = ?
@@ -83,7 +109,13 @@ def campaign_for_year(conn: sqlite3.Connection, year: int) -> sqlite3.Row | None
 def archive_overview(conn: sqlite3.Connection, year: int) -> dict | None:
     row = conn.execute(
         """
-        SELECT c.year, c.name, c.status, s.*
+        SELECT c.year, c.name, c.status,
+               (SELECT latest.snapshot_at
+                FROM snapshots latest
+                WHERE latest.campaign_id = c.id
+                  AND latest.status IN ('ready', 'final')
+                ORDER BY latest.id DESC LIMIT 1) AS latest_freshness_at,
+               s.*
         FROM campaigns c
         LEFT JOIN campaign_stats s ON s.campaign_id = c.id
         WHERE c.year = ?
@@ -93,6 +125,7 @@ def archive_overview(conn: sqlite3.Connection, year: int) -> dict | None:
     if row is None:
         return None
     result = dict(row)
+    result["freshness_at"] = result.pop("latest_freshness_at") or result["freshness_at"]
     result["institutions"] = json.loads(result.pop("institutions_json") or "[]")
     result["programs"] = json.loads(result.pop("programs_json") or "[]")
     return result
@@ -106,6 +139,7 @@ def lookup(
     applicant_id: str,
     freshness: str,
     limit: int,
+    offset: int = 0,
 ) -> dict:
     rows = conn.execute(
         """
@@ -123,7 +157,7 @@ def lookup(
           JOIN competitions_core c ON c.id = a.competition_id
           WHERE ap.applicant_id = ? AND c.campaign_id = ?
           ORDER BY a.ordinal
-          LIMIT ?
+          LIMIT ? OFFSET ?
         )
         SELECT
           t.*, c.seats, c.row_count, c.study_form, c.quota_type,
@@ -151,8 +185,10 @@ def lookup(
         GROUP BY t.competition_id
         ORDER BY t.ordinal
         """,
-        (applicant_id, campaign_id, limit),
+        (applicant_id, campaign_id, limit + 1, offset),
     ).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     items = []
     for row in rows:
         total_before = as_int(row["total_before"])
@@ -197,7 +233,9 @@ def lookup(
         "campaign_year": year,
         "freshness_at": freshness,
         "results": items,
-        "truncated": len(items) >= limit,
+        "offset": offset,
+        "truncated": has_more,
+        "next_offset": offset + limit if has_more else None,
         "warning": "Оценка основана на последнем снимке и не гарантирует поступление.",
     }
 

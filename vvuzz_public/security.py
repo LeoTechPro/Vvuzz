@@ -14,6 +14,7 @@ from argon2.low_level import Type
 
 
 PASSWORDS = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2, type=Type.ID)
+DUMMY_PASSWORD_HASH = PASSWORDS.hash(secrets.token_urlsafe(32))
 MAX_FAILURES = 5
 LOCKOUT_MINUTES = 15
 
@@ -93,22 +94,35 @@ def authenticate(
         (username,),
     ).fetchone()
     if row is None:
+        verify_password(DUMMY_PASSWORD_HASH, password)
         audit(conn, event_type="login", outcome="denied", target_type="username")
         return None
     if row["locked_until"] and parse_iso(row["locked_until"]) > now:
+        verify_password(DUMMY_PASSWORD_HASH, password)
         audit(conn, event_type="login", outcome="locked", user_id=row["id"])
         return None
     if not verify_password(row["password_hash"], password):
-        failures = row["failed_attempts"] + 1
+        conn.execute(
+            """
+            UPDATE auth_users
+            SET failed_attempts=failed_attempts + 1, updated_at=?
+            WHERE id=?
+            """,
+            (iso(now), row["id"]),
+        )
+        failures = conn.execute(
+            "SELECT failed_attempts FROM auth_users WHERE id=?", (row["id"],)
+        ).fetchone()["failed_attempts"]
         locked_until = (
             iso(now + dt.timedelta(minutes=LOCKOUT_MINUTES))
             if failures >= MAX_FAILURES
             else None
         )
-        conn.execute(
-            "UPDATE auth_users SET failed_attempts=?, locked_until=?, updated_at=? WHERE id=?",
-            (failures, locked_until, iso(now), row["id"]),
-        )
+        if locked_until:
+            conn.execute(
+                "UPDATE auth_users SET locked_until=? WHERE id=?",
+                (locked_until, row["id"]),
+            )
         audit(conn, event_type="login", outcome="denied", user_id=row["id"])
         return None
     conn.execute(

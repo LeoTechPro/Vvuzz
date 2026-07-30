@@ -11,6 +11,15 @@
   };
   const storageKey = "vvuzz-public-v1";
 
+  function readLocalState() {
+    try {
+      const value = JSON.parse(localStorage.getItem(storageKey) || "{}");
+      return value && typeof value === "object" ? value : {};
+    } catch {
+      return {};
+    }
+  }
+
   function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -23,16 +32,12 @@
   }
 
   function loadLocalState() {
-    try {
-      const value = JSON.parse(localStorage.getItem(storageKey) || "{}");
-      state.selected = Array.isArray(value.selected) ? value.selected.slice(0, 5) : [];
-    } catch {
-      state.selected = [];
-    }
+    const value = readLocalState();
+    state.selected = Array.isArray(value.selected) ? value.selected.slice(0, 5) : [];
   }
 
   function saveLocalState() {
-    const existing = JSON.parse(localStorage.getItem(storageKey) || "{}");
+    const existing = readLocalState();
     localStorage.setItem(storageKey, JSON.stringify({
       ...existing,
       selected: state.selected.slice(0, 5),
@@ -40,7 +45,7 @@
   }
 
   function saveHistory(response) {
-    const existing = JSON.parse(localStorage.getItem(storageKey) || "{}");
+    const existing = readLocalState();
     const history = Array.isArray(existing.history) ? existing.history : [];
     history.unshift({
       savedAt: new Date().toISOString(),
@@ -165,6 +170,30 @@
       items.forEach((item) => section.append(renderCompetition(item)));
       target.append(section);
     });
+    if (response.truncated && response.next_offset !== null) {
+      const loadMore = el("button", "secondary-action", "Показать ещё 50 конкурсов");
+      loadMore.type = "button";
+      loadMore.addEventListener("click", async () => {
+        loadMore.disabled = true;
+        setStatus("Загружаем следующую часть результатов…", true);
+        try {
+          const next = await requestLookupPage(response.next_offset);
+          state.results = state.results.concat(next.results);
+          const combined = {
+            ...next,
+            found: state.results.length > 0,
+            results: state.results,
+          };
+          renderResults(combined);
+          saveHistory(combined);
+          setStatus(next.freshness_at ? `Снимок: ${next.freshness_at}` : "Показан последний доступный снимок.");
+        } catch (error) {
+          setStatus(error.message || "Не удалось загрузить следующую часть.");
+          loadMore.disabled = false;
+        }
+      });
+      target.append(loadMore);
+    }
   }
 
   function updateCompareTray() {
@@ -216,14 +245,7 @@
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;
     try {
-      const response = await fetch(`${base}/api/public/lookup`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({year: state.year, applicant_id: state.applicantId}),
-        cache: "no-store",
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.detail || "Не удалось выполнить поиск");
+      const result = await requestLookupPage(0);
       state.results = result.results;
       renderResults(result);
       if (result.found) saveHistory(result);
@@ -234,6 +256,18 @@
     } finally {
       button.disabled = false;
     }
+  }
+
+  async function requestLookupPage(offset) {
+    const response = await fetch(`${base}/api/public/lookup`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({year: state.year, applicant_id: state.applicantId, offset}),
+      cache: "no-store",
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || "Не удалось выполнить поиск");
+    return result;
   }
 
   async function loadArchive(year) {

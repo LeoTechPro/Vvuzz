@@ -28,4 +28,23 @@ def test_additive_migration_preserves_counts_and_campaigns(migrated_db):
     assert conn.execute(
         "SELECT competition_count FROM campaign_stats s JOIN campaigns c ON c.id=s.campaign_id WHERE c.year=2026"
     ).fetchone()[0] == 2
+    assert conn.execute("SELECT count(*) FROM snapshots").fetchone()[0] == 2
+    assert conn.execute(
+        "SELECT final_snapshot_id IS NOT NULL FROM campaigns WHERE year=2025"
+    ).fetchone()[0] == 1
+    conn.execute(
+        """
+        INSERT INTO competitions_core(
+          source_path, file_name, path_json, row_count, imported_at
+        ) VALUES ('gosuslugi2026/competition/legacy-v1', 'legacy.json', '[]', 0, '2026-07-30T12:00:00+00:00')
+        """
+    )
+    assert conn.execute(
+        """
+        SELECT c.year
+        FROM competitions_core core
+        JOIN campaigns c ON c.id = core.campaign_id
+        WHERE core.source_path = 'gosuslugi2026/competition/legacy-v1'
+        """
+    ).fetchone()[0] == 2026
     conn.close()
