@@ -197,7 +197,12 @@ def ingest_lock_probe(
     """Acquire the same main-DB write lock as ingest, then roll it back."""
     barrier.wait()
     started = time.perf_counter()
-    conn = sqlite3.connect(db_path, timeout=timeout)
+    db_uri = (
+        "file:"
+        f"{urllib.parse.quote(str(db_path.resolve()), safe='/')}"
+        "?mode=rw"
+    )
+    conn = sqlite3.connect(db_uri, uri=True, timeout=timeout)
     try:
         conn.execute(f"PRAGMA busy_timeout={max(1, int(timeout * 1000))}")
         conn.execute("BEGIN IMMEDIATE")

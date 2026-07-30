@@ -56,3 +56,17 @@ def test_ingest_lock_probe_rolls_back_without_mutating_db(tmp_path: Path) -> Non
     assert duration >= 0
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT count(*) FROM campaigns").fetchone()[0] == 1
+
+
+def test_ingest_lock_probe_does_not_create_missing_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "missing.sqlite"
+
+    with pytest.raises(sqlite3.OperationalError):
+        ingest_lock_probe(
+            threading.Barrier(1),
+            db_path,
+            timeout=1.0,
+            hold_seconds=0,
+        )
+
+    assert not db_path.exists()
