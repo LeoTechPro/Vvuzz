@@ -20,9 +20,15 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/int/vvuzz
-ReadOnlyPaths=/int/vvuzz/app.py /int/vvuzz/vvuzz_public /int/vvuzz/migrations
+ReadOnlyPaths=/int/vvuzz/app.py /int/vvuzz/chance.py
+ReadOnlyPaths=/int/vvuzz/gosuslugi_parser.py /int/vvuzz/import_zip_to_norm_sqlite.py
+ReadOnlyPaths=/int/vvuzz/import_zip_to_sqlite.py /int/vvuzz/normalize_sqlite.py
+ReadOnlyPaths=/int/vvuzz/vvuzz_public /int/vvuzz/migrations
 ReadOnlyPaths=/int/vvuzz/deploy /int/vvuzz/docs /int/vvuzz/tests
 ReadOnlyPaths=/int/vvuzz/requirements.txt /int/vvuzz/requirements.lock
+ReadOnlyPaths=/int/vvuzz/.env /int/vvuzz/.env.public
+ReadOnlyPaths=/int/vvuzz/README.md /int/vvuzz/AGENTS.md
+ReadOnlyPaths=/int/vvuzz/.gitignore /int/vvuzz/.gitattributes
 InaccessiblePaths=/int/vvuzz/.git
 
 [Install]
