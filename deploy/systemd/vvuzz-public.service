@@ -1,0 +1,26 @@
+[Unit]
+Description=Vvuzz Public admissions navigator
+After=network.target
+
+[Service]
+Type=simple
+User=agents
+Group=intdata
+WorkingDirectory=/int/vvuzz
+Environment=PYTHONUNBUFFERED=1
+Environment=VVUZZ_ENV=production
+Environment=VVUZZ_BASE_PATH=/
+Environment=VVUZZ_DB_PATH=/int/.runtime/vvuzz-public/data/vuzonline.vds.sqlite
+EnvironmentFile=/int/vvuzz/.env.public
+ExecStart=/int/.runtime/vvuzz-public/venv/bin/python -m uvicorn vvuzz_public.main:app --host 127.0.0.1 --port 9186 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/int/.runtime/vvuzz-public/data
+InaccessiblePaths=/int/vvuzz/.git
+
+[Install]
+WantedBy=multi-user.target

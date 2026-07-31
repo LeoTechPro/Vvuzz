@@ -1,0 +1,49 @@
+# Production locations for the existing vvuzz.intdata.pro TLS server{}.
+# Install vvuzz-public-http.conf.example in http{} first.
+
+location = /api/public/lookup {
+    limit_req zone=vvuzz_public_lookup burst=25 nodelay;
+    access_log /var/log/nginx/vvuzz-public.access.log vvuzz_public;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_pass http://127.0.0.1:9186/api/public/lookup;
+}
+
+location = /lookup {
+    limit_req zone=vvuzz_public_lookup burst=25 nodelay;
+    access_log /var/log/nginx/vvuzz-public.access.log vvuzz_public;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_pass http://127.0.0.1:9186/lookup;
+}
+
+location = /api/public/competition {
+    limit_req zone=vvuzz_public_detail burst=25 nodelay;
+    access_log /var/log/nginx/vvuzz-public.access.log vvuzz_public;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_pass http://127.0.0.1:9186/api/public/competition;
+}
+
+location = /manage/login {
+    limit_req zone=vvuzz_manage_login burst=3 nodelay;
+    access_log /var/log/nginx/vvuzz-public.access.log vvuzz_public;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_pass http://127.0.0.1:9186/manage/login;
+}
+
+# /api/ingest/v2/batch remains in the beta snippet during the parser transition.
+# The legacy /api/ingest/batch route stays available as the documented rollback target.

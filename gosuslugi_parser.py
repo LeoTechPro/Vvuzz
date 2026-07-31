@@ -15,10 +15,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from import_zip_to_sqlite import DEFAULT_ZIP, init_db, import_workbook
-
-
 PROJECT_DIR = Path(__file__).resolve().parent
+DEFAULT_ZIP = PROJECT_DIR / ".." / "2025-07-24 13-40-58.zip"
 DEFAULT_DB = PROJECT_DIR / "vuzonline_2025_full.sqlite"
 DEFAULT_SANDBOX_DB = PROJECT_DIR / "parser_sandbox.sqlite"
 RAW_DIR = PROJECT_DIR / "raw" / "gosuslugi"
@@ -85,6 +83,8 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 def init_parser_db(conn: sqlite3.Connection) -> None:
+    from import_zip_to_sqlite import init_db
+
     init_db(conn)
     conn.executescript(PARSER_SCHEMA)
     conn.commit()
@@ -157,6 +157,8 @@ def seed_fixture_queue(conn: sqlite3.Connection, zip_path: Path, limit: int = 0)
 
 
 def fixture_import(conn: sqlite3.Connection, zip_path: Path, limit: int, run_id: int) -> tuple[int, int, int]:
+    from import_zip_to_sqlite import import_workbook
+
     with zipfile.ZipFile(zip_path) as archive:
         rows = conn.execute(
             """
@@ -568,6 +570,65 @@ def post_ingest(target_url: str, token: str, batch: dict, timeout: int) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def build_ingest_batch(
+    *,
+    api_version: str,
+    campaign_year: int,
+    run_id: str,
+    source: str,
+    source_key: str,
+    snapshot_at: str,
+    competitions: list[dict],
+    payload_sha256: str | None = None,
+    config: dict | None = None,
+    refresh_stats: bool = False,
+    finalize_campaign: bool = False,
+) -> dict:
+    if api_version == "v2":
+        return {
+            "campaign_year": campaign_year,
+            "run_id": run_id,
+            "source_key": source_key,
+            "snapshot_at": snapshot_at,
+            "refresh_stats": refresh_stats,
+            "finalize_campaign": finalize_campaign,
+            "competitions": competitions,
+        }
+    return {
+        "run_id": run_id,
+        "source": source,
+        "source_key": source_key,
+        "payload_sha256": payload_sha256,
+        "fetched_at": snapshot_at,
+        "started_at": run_id,
+        "config": config or {},
+        "competitions": competitions,
+    }
+
+
+def finish_v2_ingest(args, targets: list[tuple[str, str]], run_id: str, snapshot_at: str) -> None:
+    if args.ingest_version != "v2":
+        return
+    batch = build_ingest_batch(
+        api_version="v2",
+        campaign_year=args.campaign_year,
+        run_id=run_id,
+        source="gosuslugi_vuznavigator",
+        source_key=f"run:{run_id}:complete",
+        snapshot_at=snapshot_at,
+        competitions=[],
+        refresh_stats=args.refresh_stats,
+        finalize_campaign=args.finalize_campaign,
+    )
+    for kind, target in targets:
+        if kind != "ingest":
+            continue
+        if not args.ingest_token:
+            raise SystemExit("ingest target needs --ingest-token or VVUZZ_INGEST_TOKEN")
+        result = post_ingest(target, args.ingest_token, batch, args.timeout)
+        print(f"ingest completion target={target} result={result}")
+
+
 VUZNAV_URL_RE = re.compile(
     r"/vuznavigator/specialties/"
     r"(?P<okso>[^/]+)/(?P<education_level>[^/]+)/(?P<organization_id>\d+)/"
@@ -735,6 +796,7 @@ def write_vuznav_raw(raw_archive: RawArchive | None, record: dict, payload: byte
 def command_vuznav_fetch(args) -> int:
     urls = read_urls(args)
     run_id = args.run_id or now_iso().replace(":", "-")
+    run_snapshot_at = args.snapshot_at or now_iso()
     raw_archive = RawArchive(args.raw_dir, run_id) if args.mode in {"raw-only", "both"} else None
     targets = [target_kind(target) for target in (args.target or [])]
     if args.mode in {"norm-only", "both"} and not targets:
@@ -805,16 +867,17 @@ def command_vuznav_fetch(args) -> int:
                 }, rating_payload)
             competition = vuznav_competition(meta, applicants_data, details_data, fetched_at)
             if args.mode in {"norm-only", "both"}:
-                batch = {
-                    "run_id": run_id,
-                    "source": "gosuslugi_vuznavigator",
-                    "source_key": competition["source_path"],
-                    "payload_sha256": digest,
-                    "fetched_at": fetched_at,
-                    "started_at": run_id,
-                    "config": {"source_url": page_url, "competition_id": meta["competition_id"]},
-                    "competitions": [competition],
-                }
+                batch = build_ingest_batch(
+                    api_version=args.ingest_version,
+                    campaign_year=args.campaign_year,
+                    run_id=run_id,
+                    source="gosuslugi_vuznavigator",
+                    source_key=competition["source_path"],
+                    snapshot_at=run_snapshot_at if args.ingest_version == "v2" else fetched_at,
+                    competitions=[competition],
+                    payload_sha256=digest,
+                    config={"source_url": page_url, "competition_id": meta["competition_id"]},
+                )
                 for kind, target in targets:
                     if kind == "sqlite":
                         comp_count, app_count = write_norm_sqlite(Path(target), [competition], fetched_at)
@@ -839,6 +902,8 @@ def command_vuznav_fetch(args) -> int:
             print(f"vuznav competition={meta.get('competition_id')} error: {exc}", file=sys.stderr)
             if args.stop_on_error:
                 return 1
+    if errors == 0 and not args.dry_run:
+        finish_v2_ingest(args, targets, run_id, run_snapshot_at)
     print(f"vuznav-fetch done processed={processed} errors={errors} run_id={run_id}")
     return 0 if errors == 0 else 1
 
@@ -846,6 +911,7 @@ def command_vuznav_fetch(args) -> int:
 def command_live_crawl(args) -> int:
     urls = read_urls(args)
     run_id = args.run_id or now_iso().replace(":", "-")
+    run_snapshot_at = args.snapshot_at or now_iso()
     raw_archive = RawArchive(args.raw_dir, run_id) if args.mode in {"raw-only", "both"} else None
     targets = [target_kind(target) for target in (args.target or [])]
     if args.mode in {"norm-only", "both"} and not targets:
@@ -892,14 +958,16 @@ def command_live_crawl(args) -> int:
                     raw_archive.write_payload(record, payload)
                 competitions = extract_competitions(payload, record["content_type"])
                 if args.mode in {"norm-only", "both"}:
-                    batch = {
-                        "run_id": run_id,
-                        "source": "gosuslugi",
-                        "source_key": record["source_key"],
-                        "payload_sha256": digest,
-                        "fetched_at": fetched_at,
-                        "competitions": competitions,
-                    }
+                    batch = build_ingest_batch(
+                        api_version=args.ingest_version,
+                        campaign_year=args.campaign_year,
+                        run_id=run_id,
+                        source="gosuslugi",
+                        source_key=record["source_key"],
+                        snapshot_at=run_snapshot_at if args.ingest_version == "v2" else fetched_at,
+                        competitions=competitions,
+                        payload_sha256=digest,
+                    )
                     for kind, target in targets:
                         if kind == "sqlite":
                             comp_count, app_count = write_norm_sqlite(Path(target), competitions, fetched_at)
@@ -927,6 +995,8 @@ def command_live_crawl(args) -> int:
     if stopped:
         print(f"stopped processed={processed} suggested_backoff_seconds={args.backoff_seconds}")
         return 2
+    if not args.dry_run:
+        finish_v2_ingest(args, targets, run_id, run_snapshot_at)
     print(f"live-crawl done processed={processed} run_id={run_id}")
     return 0
 
@@ -973,7 +1043,12 @@ def build_parser():
     p_live.add_argument("--raw-dir", type=Path, default=RAW_DIR)
     p_live.add_argument("--target", action="append", help="sqlite://path or ingest+https://host/api/ingest/batch. Can be repeated.")
     p_live.add_argument("--ingest-token", default=os.getenv("VVUZZ_INGEST_TOKEN", ""))
+    p_live.add_argument("--ingest-version", choices=("v2", "legacy"), default="v2")
+    p_live.add_argument("--campaign-year", type=int, default=2026)
+    p_live.add_argument("--refresh-stats", action=argparse.BooleanOptionalAction, default=True)
+    p_live.add_argument("--finalize-campaign", action=argparse.BooleanOptionalAction, default=False)
     p_live.add_argument("--run-id")
+    p_live.add_argument("--snapshot-at", help="Stable ISO 8601 timestamp for all v2 batches in this run.")
     p_live.add_argument("--rpm", type=int, default=DEFAULT_RPM)
     p_live.add_argument("--timeout", type=int, default=20)
     p_live.add_argument("--backoff-seconds", type=int, default=DEFAULT_BACKOFF_SECONDS)
@@ -987,7 +1062,12 @@ def build_parser():
     p_vuznav.add_argument("--raw-dir", type=Path, default=RAW_DIR)
     p_vuznav.add_argument("--target", action="append", help="sqlite://path or ingest+https://host/api/ingest/batch. Can be repeated.")
     p_vuznav.add_argument("--ingest-token", default=os.getenv("VVUZZ_INGEST_TOKEN", ""))
+    p_vuznav.add_argument("--ingest-version", choices=("v2", "legacy"), default="v2")
+    p_vuznav.add_argument("--campaign-year", type=int, default=2026)
+    p_vuznav.add_argument("--refresh-stats", action=argparse.BooleanOptionalAction, default=True)
+    p_vuznav.add_argument("--finalize-campaign", action=argparse.BooleanOptionalAction, default=False)
     p_vuznav.add_argument("--run-id")
+    p_vuznav.add_argument("--snapshot-at", help="Stable ISO 8601 timestamp for all v2 batches in this run.")
     p_vuznav.add_argument("--rpm", type=int, default=10, help="Conservative default for Gosuslugi public-service endpoints.")
     p_vuznav.add_argument("--timeout", type=int, default=30)
     p_vuznav.add_argument("--backoff-seconds", type=int, default=DEFAULT_BACKOFF_SECONDS)

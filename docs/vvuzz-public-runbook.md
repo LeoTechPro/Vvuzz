@@ -176,6 +176,33 @@ Latency проверяется напрямую на beta upstream, чтобы N
 Legacy `/api/ingest/batch` остаётся направлен на старый процесс до отдельного
 обновления и проверки парсера.
 
+Штатный production-запуск выполняется с доверенного ПК:
+
+```powershell
+$env:VVUZZ_INGEST_TOKEN = "<token>"
+python .\gosuslugi_parser.py vuznav-fetch --mode both `
+  --raw-dir I:\VvuzzRaw `
+  --url-file .\vuznavigator-2026-urls.txt `
+  --target ingest+https://vvuzz.intdata.pro/api/ingest/v2/batch `
+  --campaign-year 2026 `
+  --refresh-stats `
+  --no-finalize-campaign `
+  --rpm 10 --stop-on-error
+```
+
+Все batches одного прохода используют общий `run_id`; `source_key` привязан к
+конкурсу. Только после прохода без ошибок отправляется completion batch с
+пустым `competitions`, который пересчитывает агрегаты. Повтор команды с тем же
+явными одинаковыми `--run-id` и `--snapshot-at` безопасен при неизменных
+payload. Без этих параметров новый запуск является новым снимком. Raw остаётся
+только на ПК.
+
+После production-переключения устанавливается
+`deploy/systemd/vvuzz-public.service`. Beta unit останавливается, но сохраняется
+как воспроизводимый rollback-артефакт. Legacy endpoint и процесс остаются
+доступны как переходный rollback-контур; их удаление требует отдельного
+OpenSpec-изменения.
+
 ## 8. Production gate
 
 До переключения обязательны:
