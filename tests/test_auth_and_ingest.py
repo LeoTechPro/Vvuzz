@@ -169,6 +169,18 @@ def test_ingest_v2_is_idempotent(migrated_db):
     finalized = client.post(
         "/api/ingest/v2/batch", json=final_payload, headers=headers
     )
+    conn = sqlite3.connect(migrated_db)
+    conn.execute(
+        """
+        CREATE TRIGGER reject_duplicate_stats_refresh
+        BEFORE UPDATE ON campaign_stats
+        BEGIN
+          SELECT RAISE(ABORT, 'duplicate completion must not refresh stats');
+        END
+        """
+    )
+    conn.commit()
+    conn.close()
     finalized_retry = client.post(
         "/api/ingest/v2/batch", json=final_payload, headers=headers
     )
@@ -177,6 +189,7 @@ def test_ingest_v2_is_idempotent(migrated_db):
     assert finalized_retry.json()["duplicate"] is True
 
     conn = sqlite3.connect(migrated_db)
+    conn.execute("DROP TRIGGER reject_duplicate_stats_refresh")
     assert conn.execute(
         "SELECT count(*) FROM snapshots WHERE run_id='run-test-1' AND source_key='source-test-1'"
     ).fetchone()[0] == 1

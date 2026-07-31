@@ -331,17 +331,8 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
                     "snapshot_id": duplicate["id"],
                     "error": "idempotency key was already used with another payload",
                 }
-            final_status = duplicate["status"]
-            if payload.get("refresh_stats") or payload.get("finalize_campaign"):
-                final_status = refresh_and_finalize(
-                    conn,
-                    campaign_id=campaign["id"],
-                    snapshot_id=duplicate["id"],
-                    payload=payload,
-                    timestamp=timestamp,
-                )
             return 200, {
-                "accepted": final_status in {"ready", "final"},
+                "accepted": duplicate["status"] in {"ready", "final"},
                 "duplicate": True,
                 "snapshot_id": duplicate["id"],
                 "competitions": duplicate["competition_count"],

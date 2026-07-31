@@ -16,7 +16,7 @@
 2. `norm-only`
    - raw payload files не создает;
    - требует минимум один `--target`;
-   - цель может быть `sqlite://<path>` или `ingest+https://vvuzz.intdata.pro/api/ingest/batch`.
+   - цель может быть `sqlite://<path>` или `ingest+https://vvuzz.intdata.pro/api/ingest/v2/batch`.
 
 3. `both`
    - пишет raw локально;
@@ -29,7 +29,7 @@ python .\gosuslugi_parser.py live-crawl --mode raw-only --raw-dir I:\VvuzzRaw --
 
 python .\gosuslugi_parser.py live-crawl --mode norm-only `
   --target sqlite://I:/Мой диск/Vvuzz/vvuzz-online/local_live.sqlite `
-  --target ingest+https://vvuzz.intdata.pro/api/ingest/batch `
+  --target ingest+https://vvuzz.intdata.pro/api/ingest/v2/batch `
   --ingest-token <token> `
   --url https://example.test/data
 
