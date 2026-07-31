@@ -183,6 +183,9 @@ def test_ingest_v2_is_idempotent(migrated_db):
     assert conn.execute(
         "SELECT status FROM campaigns WHERE year=2026"
     ).fetchone()[0] == "final"
+    assert conn.execute(
+        "SELECT count(*) FROM applicants WHERE applicant_id='2026:4150096'"
+    ).fetchone()[0] == 1
     conn.close()
 
 

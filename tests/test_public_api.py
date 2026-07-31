@@ -63,6 +63,33 @@ def test_missing_lookup_keeps_response_shape(migrated_db):
     assert missing["results"] == []
 
 
+def test_lookup_accepts_raw_id_for_year_namespaced_storage(migrated_db):
+    conn = sqlite3.connect(migrated_db)
+    conn.execute(
+        "UPDATE applicants SET applicant_id='2026:4150096' WHERE applicant_id='4150096'"
+    )
+    conn.commit()
+    conn.close()
+
+    client = client_for(migrated_db)
+    lookup = client.post(
+        "/api/public/lookup", json={"year": 2026, "applicant_id": "4150096"}
+    )
+    assert lookup.status_code == 200
+    assert lookup.json()["found"] is True
+    competition_id = lookup.json()["results"][0]["competition_id"]
+    details = client.post(
+        "/api/public/competition",
+        json={
+            "year": 2026,
+            "applicant_id": "4150096",
+            "competition_ids": [competition_id],
+        },
+    )
+    assert details.status_code == 200
+    assert details.json()["competitions"]
+
+
 def test_extreme_and_invalid_ids(migrated_db):
     client = client_for(migrated_db)
     extreme = client.post(

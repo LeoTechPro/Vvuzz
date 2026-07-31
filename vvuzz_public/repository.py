@@ -174,6 +174,10 @@ def _result_items(rows: list[sqlite3.Row]) -> list[dict]:
     return items
 
 
+def applicant_storage_ids(year: int, applicant_id: str) -> tuple[str, str]:
+    return f"{year}:{applicant_id}", applicant_id
+
+
 def lookup_positions(
     conn: sqlite3.Connection,
     *,
@@ -195,11 +199,11 @@ def lookup_positions(
         JOIN competitions_core c ON c.id = a.competition_id
         LEFT JOIN universities u ON u.id = c.university_id
         LEFT JOIN programs p ON p.id = c.program_id
-        WHERE ap.applicant_id = ? AND c.campaign_id = ?
+        WHERE ap.applicant_id IN (?, ?) AND c.campaign_id = ?
         ORDER BY a.ordinal, a.competition_id
         LIMIT ? OFFSET ?
         """,
-        (applicant_id, campaign_id, limit + 1, offset),
+        (*applicant_storage_ids(year, applicant_id), campaign_id, limit + 1, offset),
     ).fetchall()
     has_more = len(rows) > limit
     items = [dict(row) for row in rows[:limit]]
@@ -239,7 +243,7 @@ def lookup(
           FROM applicants ap
           JOIN applications a ON a.applicant_id = ap.id
           JOIN competitions_core c ON c.id = a.competition_id
-          WHERE ap.applicant_id = ? AND c.campaign_id = ?
+          WHERE ap.applicant_id IN (?, ?) AND c.campaign_id = ?
           ORDER BY a.ordinal, a.competition_id
           LIMIT ? OFFSET ?
         )
@@ -269,7 +273,7 @@ def lookup(
         GROUP BY t.competition_id
         ORDER BY t.ordinal, t.competition_id
         """,
-        (applicant_id, campaign_id, limit + 1, offset),
+        (*applicant_storage_ids(year, applicant_id), campaign_id, limit + 1, offset),
     ).fetchall()
     has_more = len(rows) > limit
     rows = rows[:limit]
@@ -290,6 +294,7 @@ def competition_details(
     conn: sqlite3.Connection,
     *,
     campaign_id: int,
+    year: int,
     applicant_id: str,
     competition_ids: list[int],
 ) -> list[dict]:
@@ -304,7 +309,7 @@ def competition_details(
           FROM applicants ap
           JOIN applications a ON a.applicant_id = ap.id
           JOIN competitions_core c ON c.id = a.competition_id
-          WHERE ap.applicant_id = ?
+          WHERE ap.applicant_id IN (?, ?)
             AND c.campaign_id = ?
             AND c.id IN ({placeholders})
         )
@@ -334,6 +339,6 @@ def competition_details(
         GROUP BY t.competition_id
         ORDER BY t.ordinal, t.competition_id
         """,
-        (applicant_id, campaign_id, *competition_ids),
+        (*applicant_storage_ids(year, applicant_id), campaign_id, *competition_ids),
     ).fetchall()
     return _result_items(rows)

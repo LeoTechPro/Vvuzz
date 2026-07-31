@@ -43,6 +43,7 @@ def upsert_applications(
     competition_id: int,
     applications: list[dict],
     *,
+    campaign_year: int,
     replace: bool,
 ) -> tuple[int, int]:
     by_external_id: dict[str, dict] = {}
@@ -50,7 +51,12 @@ def upsert_applications(
         external_id = str(application.get("applicant_id") or "").strip()
         if not external_id:
             raise ValueError("application.applicant_id is required")
-        by_external_id[external_id] = application
+        storage_id = (
+            external_id
+            if external_id.startswith(f"{campaign_year}:")
+            else f"{campaign_year}:{external_id}"
+        )
+        by_external_id[storage_id] = application
     external_ids = list(by_external_id)
     conn.executemany(
         "INSERT OR IGNORE INTO applicants(applicant_id) VALUES (?)",
@@ -413,6 +419,7 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
                 conn,
                 competition_id,
                 applications,
+                campaign_year=year,
                 replace=bool(item.get("replace_applications")),
             )
             inserted += inserted_count

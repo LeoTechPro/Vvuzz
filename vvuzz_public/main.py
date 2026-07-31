@@ -298,6 +298,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             details = competition_details(
                 conn,
                 campaign_id=campaign["id"],
+                year=year,
                 applicant_id=applicant_id,
                 competition_ids=competition_ids,
             )
