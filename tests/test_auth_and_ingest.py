@@ -278,6 +278,10 @@ def test_ingest_v2_replaces_legacy_raw_identity_without_duplicate(migrated_db):
 
 def test_ingest_v2_preserves_existing_competition_metadata(migrated_db):
     conn = sqlite3.connect(migrated_db)
+    dimension_counts_before = (
+        conn.execute("SELECT count(*) FROM programs").fetchone()[0],
+        conn.execute("SELECT count(*) FROM universities").fetchone()[0],
+    )
     before = conn.execute(
         """
         SELECT c.id, c.source_path, c.file_name, c.program_id, c.education_level,
@@ -315,6 +319,7 @@ def test_ingest_v2_preserves_existing_competition_metadata(migrated_db):
         headers={"X-Vvuzz-Ingest-Token": "test-ingest-token"},
     )
     assert response.status_code == 202
+    snapshot_id = response.json()["snapshot_id"]
     conn = sqlite3.connect(migrated_db)
     after = conn.execute(
         """
@@ -325,8 +330,21 @@ def test_ingest_v2_preserves_existing_competition_metadata(migrated_db):
         """,
         (before[0],),
     ).fetchone()
+    dimension_counts_after = (
+        conn.execute("SELECT count(*) FROM programs").fetchone()[0],
+        conn.execute("SELECT count(*) FROM universities").fetchone()[0],
+    )
+    metric_seats = conn.execute(
+        """
+        SELECT seats FROM competition_snapshot_metrics
+        WHERE snapshot_id=? AND competition_id=?
+        """,
+        (snapshot_id, before[0]),
+    ).fetchone()[0]
     conn.close()
     assert after == before
+    assert dimension_counts_after == dimension_counts_before
+    assert metric_seats == before[9]
 
 
 def test_ingest_v2_rejects_preserve_metadata_for_unknown_competition(migrated_db):

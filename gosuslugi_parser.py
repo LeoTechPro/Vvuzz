@@ -465,32 +465,37 @@ def write_norm_sqlite(db_path: Path, competitions: list[dict], fetched_at: str) 
         source_path = comp.get("source_path")
         if not source_path:
             continue
-        program_id = norm_name_id(conn, "programs", comp.get("program"))
-        university_id = norm_name_id(conn, "universities", comp.get("university"))
         existing = conn.execute("SELECT id FROM competitions_core WHERE source_path = ?", (source_path,)).fetchone()
-        path_json = json.dumps(comp.get("path") or [], ensure_ascii=False)
-        values = (
-            source_path,
-            comp.get("file_name") or Path(source_path).name,
-            program_id,
-            comp.get("education_level"),
-            comp.get("city"),
-            university_id,
-            comp.get("study_form"),
-            comp.get("quota_type"),
-            comp.get("seats"),
-            path_json,
-            len(comp.get("applications") or []),
-            fetched_at,
-        )
-        if existing:
+        if existing and comp.get("preserve_metadata"):
             competition_id = existing["id"]
+            conn.execute(
+                "UPDATE competitions_core SET row_count=?, imported_at=? WHERE id=?",
+                (len(comp.get("applications") or []), fetched_at, competition_id),
+            )
+        else:
             if comp.get("preserve_metadata"):
-                conn.execute(
-                    "UPDATE competitions_core SET row_count=?, imported_at=? WHERE id=?",
-                    (len(comp.get("applications") or []), fetched_at, competition_id),
+                raise ValueError(
+                    "preserve_metadata requires an existing competition source_path"
                 )
-            else:
+            program_id = norm_name_id(conn, "programs", comp.get("program"))
+            university_id = norm_name_id(conn, "universities", comp.get("university"))
+            path_json = json.dumps(comp.get("path") or [], ensure_ascii=False)
+            values = (
+                source_path,
+                comp.get("file_name") or Path(source_path).name,
+                program_id,
+                comp.get("education_level"),
+                comp.get("city"),
+                university_id,
+                comp.get("study_form"),
+                comp.get("quota_type"),
+                comp.get("seats"),
+                path_json,
+                len(comp.get("applications") or []),
+                fetched_at,
+            )
+            if existing:
+                competition_id = existing["id"]
                 conn.execute(
                     """
                     UPDATE competitions_core
@@ -500,21 +505,17 @@ def write_norm_sqlite(db_path: Path, competitions: list[dict], fetched_at: str) 
                     """,
                     values[1:] + (competition_id,),
                 )
-        else:
-            if comp.get("preserve_metadata"):
-                raise ValueError(
-                    "preserve_metadata requires an existing competition source_path"
-                )
-            competition_id = conn.execute(
-                """
-                INSERT INTO competitions_core(
-                    source_path, file_name, program_id, education_level, city, university_id,
-                    study_form, quota_type, seats, path_json, row_count, imported_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                values,
-            ).lastrowid
-            comp_count += 1
+            else:
+                competition_id = conn.execute(
+                    """
+                    INSERT INTO competitions_core(
+                        source_path, file_name, program_id, education_level, city, university_id,
+                        study_form, quota_type, seats, path_json, row_count, imported_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    values,
+                ).lastrowid
+                comp_count += 1
         if comp.get("replace_applications"):
             conn.execute("DELETE FROM applications WHERE competition_id = ?", (competition_id,))
         for app in comp.get("applications") or []:

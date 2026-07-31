@@ -374,40 +374,50 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
             if not source_path:
                 raise ValueError("competition.source_path is required")
             applications = item.get("applications") or []
-            program_id = named_id(conn, "programs", item.get("program"))
-            university_id = named_id(conn, "universities", item.get("university"))
             existing = conn.execute(
-                "SELECT id, campaign_id FROM competitions_core WHERE source_path = ?",
+                "SELECT id, campaign_id, seats FROM competitions_core WHERE source_path = ?",
                 (source_path,),
             ).fetchone()
-            values = (
-                item.get("file_name") or Path(source_path).name,
-                program_id,
-                item.get("education_level"),
-                item.get("city"),
-                university_id,
-                item.get("study_form"),
-                item.get("quota_type"),
-                item.get("seats"),
-                json.dumps(item.get("path") or [], ensure_ascii=False),
-                len(applications),
-                str(payload["snapshot_at"]),
-                campaign["id"],
-            )
-            if existing:
+            preserve_metadata = bool(item.get("preserve_metadata"))
+            if existing and preserve_metadata:
                 if existing["campaign_id"] not in {None, campaign["id"]}:
                     raise ValueError("source_path already belongs to another campaign")
                 competition_id = existing["id"]
-                if item.get("preserve_metadata"):
-                    conn.execute(
-                        """
-                        UPDATE competitions_core
-                        SET row_count=?, imported_at=?, campaign_id=?
-                        WHERE id=?
-                        """,
-                        (len(applications), timestamp, campaign["id"], competition_id),
+                metric_seats = existing["seats"]
+                conn.execute(
+                    """
+                    UPDATE competitions_core
+                    SET row_count=?, imported_at=?, campaign_id=?
+                    WHERE id=?
+                    """,
+                    (len(applications), timestamp, campaign["id"], competition_id),
+                )
+            else:
+                if preserve_metadata:
+                    raise ValueError(
+                        "preserve_metadata requires an existing competition source_path"
                     )
-                else:
+                program_id = named_id(conn, "programs", item.get("program"))
+                university_id = named_id(conn, "universities", item.get("university"))
+                values = (
+                    item.get("file_name") or Path(source_path).name,
+                    program_id,
+                    item.get("education_level"),
+                    item.get("city"),
+                    university_id,
+                    item.get("study_form"),
+                    item.get("quota_type"),
+                    item.get("seats"),
+                    json.dumps(item.get("path") or [], ensure_ascii=False),
+                    len(applications),
+                    str(payload["snapshot_at"]),
+                    campaign["id"],
+                )
+                metric_seats = item.get("seats")
+                if existing:
+                    if existing["campaign_id"] not in {None, campaign["id"]}:
+                        raise ValueError("source_path already belongs to another campaign")
+                    competition_id = existing["id"]
                     conn.execute(
                         """
                         UPDATE competitions_core
@@ -418,22 +428,18 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
                         """,
                         (*values, competition_id),
                     )
-            else:
-                if item.get("preserve_metadata"):
-                    raise ValueError(
-                        "preserve_metadata requires an existing competition source_path"
+                else:
+                    inserted_row = conn.execute(
+                        """
+                        INSERT INTO competitions_core(
+                          source_path, file_name, program_id, education_level, city,
+                          university_id, study_form, quota_type, seats, path_json,
+                          row_count, imported_at, campaign_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (source_path, *values),
                     )
-                inserted_row = conn.execute(
-                    """
-                    INSERT INTO competitions_core(
-                      source_path, file_name, program_id, education_level, city,
-                      university_id, study_form, quota_type, seats, path_json,
-                      row_count, imported_at, campaign_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (source_path, *values),
-                )
-                competition_id = inserted_row.lastrowid
+                    competition_id = inserted_row.lastrowid
             for application in applications:
                 external_id = str(application.get("applicant_id") or "").strip()
                 if external_id:
@@ -457,7 +463,7 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
                   snapshot_id, competition_id, seats, row_count, consent_count
                 ) VALUES (?, ?, ?, ?, ?)
                 """,
-                (snapshot_id, competition_id, item.get("seats"), len(applications), consent_count),
+                (snapshot_id, competition_id, metric_seats, len(applications), consent_count),
             )
 
         conn.execute(
