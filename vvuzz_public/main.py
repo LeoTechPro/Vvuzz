@@ -131,7 +131,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        if request.url.path.startswith("/api/public/"):
+        if request.url.path in {"/", "/archive"} or request.url.path.startswith(
+            "/api/public/"
+        ):
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Robots-Tag"] = "noindex, nofollow"
         if request.url.path.startswith("/manage"):

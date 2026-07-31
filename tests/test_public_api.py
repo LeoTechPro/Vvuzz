@@ -23,6 +23,15 @@ def client_for(db_path):
     return TestClient(create_app(settings))
 
 
+def test_public_html_is_not_cached_or_indexed(migrated_db):
+    client = client_for(migrated_db)
+    for path in ("/", "/archive"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["x-robots-tag"] == "noindex, nofollow"
+
+
 def test_lookup_is_post_only_and_privacy_bounded(migrated_db):
     client = client_for(migrated_db)
     response = client.post(
