@@ -9,8 +9,8 @@ Issue: https://github.com/LeoTechPro/int/issues/808
 
 ```bash
 cd /int/vvuzz
-python3 migrations/migrate.py --db /int/vvuzz/vuzonline_2025_norm.vds.sqlite
-sqlite3 /int/vvuzz/vuzonline_2025_norm.vds.sqlite 'PRAGMA integrity_check;'
+python3 migrations/migrate.py --db /int/vvuzz/vuzonline.vds.sqlite
+sqlite3 /int/vvuzz/vuzonline.vds.sqlite 'PRAGMA integrity_check;'
 df -B1 /int/vvuzz
 free -b
 ```
@@ -25,7 +25,7 @@ free -b
 новый Python-модуль рядом с source и закрепиться после restart. Legacy и beta
 поэтому должны читать одну SQLite из отдельного writable-каталога:
 
-`/int/.runtime/vvuzz-public/data/vuzonline_2025_norm.vds.sqlite`.
+`/int/.runtime/vvuzz-public/data/vuzonline.vds.sqlite`.
 
 Перемещение выполняется только в отдельное owner-approved окно с остановленным
 legacy writer. Это path rewrite, поэтому approval должен называть все команды
@@ -35,12 +35,12 @@ legacy writer. Это path rewrite, поэтому approval должен наз�
 
 ```bash
 systemctl stop vvuzz-online.service
-sqlite3 /int/vvuzz/vuzonline_2025_norm.vds.sqlite \
+sqlite3 /int/vvuzz/vuzonline.vds.sqlite \
   'PRAGMA wal_checkpoint(TRUNCATE);'
 install -d -o agents -g intdata -m 0750 \
   /int/.runtime/vvuzz-public/data
-mv -- /int/vvuzz/vuzonline_2025_norm.vds.sqlite \
-  /int/.runtime/vvuzz-public/data/vuzonline_2025_norm.vds.sqlite
+mv -- /int/vvuzz/vuzonline.vds.sqlite \
+  /int/.runtime/vvuzz-public/data/vuzonline.vds.sqlite
 ```
 
 Если после остановки существуют `-wal` или `-shm`, оператор сначала показывает
@@ -51,8 +51,8 @@ mv -- /int/vvuzz/vuzonline_2025_norm.vds.sqlite \
 Проверка сразу после rename:
 
 ```bash
-stat /int/.runtime/vvuzz-public/data/vuzonline_2025_norm.vds.sqlite
-sqlite3 /int/.runtime/vvuzz-public/data/vuzonline_2025_norm.vds.sqlite \
+stat /int/.runtime/vvuzz-public/data/vuzonline.vds.sqlite
+sqlite3 /int/.runtime/vvuzz-public/data/vuzonline.vds.sqlite \
   'PRAGMA integrity_check;'
 df -B1 /int
 ```
@@ -63,7 +63,7 @@ df -B1 /int
 
 ```bash
 python3 migrations/migrate.py \
-  --db /int/.runtime/vvuzz-public/data/vuzonline_2025_norm.vds.sqlite \
+  --db /int/.runtime/vvuzz-public/data/vuzonline.vds.sqlite \
   --apply \
   --with-stats
 ```
@@ -85,7 +85,7 @@ VVUZZ_INGEST_TOKEN=<separate-random-token>
 
 ```bash
 VVUZZ_ENV=production \
-VVUZZ_DB_PATH=/int/.runtime/vvuzz-public/data/vuzonline_2025_norm.vds.sqlite \
+VVUZZ_DB_PATH=/int/.runtime/vvuzz-public/data/vuzonline.vds.sqlite \
 VVUZZ_CACHE_HMAC_KEY='<key>' \
 python3 -m vvuzz_public.cli create-admin --username '<operator>'
 ```
@@ -152,7 +152,7 @@ Latency проверяется напрямую на beta upstream, чтобы N
   --base-url https://vvuzz.intdata.pro/beta \
   --year 2026 \
   --concurrency 25 \
-  --db-path /int/.runtime/vvuzz-public/data/vuzonline_2025_norm.vds.sqlite \
+  --db-path /int/.runtime/vvuzz-public/data/vuzonline.vds.sqlite \
   --ids-file /int/.tmp/codex-agent/vvuzz-808-performance-ids.txt
 ```
 
