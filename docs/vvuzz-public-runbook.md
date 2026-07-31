@@ -187,6 +187,8 @@ python .\gosuslugi_parser.py vuznav-fetch --mode both `
   --campaign-year 2026 `
   --refresh-stats `
   --no-finalize-campaign `
+  --no-fetch-details `
+  --no-status-checks `
   --rpm 10 --stop-on-error
 ```
 

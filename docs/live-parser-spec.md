@@ -132,6 +132,8 @@ python .\gosuslugi_parser.py vuznav-fetch --mode both `
   --campaign-year 2026 `
   --refresh-stats `
   --no-finalize-campaign `
+  --no-fetch-details `
+  --no-status-checks `
   --rpm 10
 ```
 
@@ -148,6 +150,9 @@ python .\gosuslugi_parser.py vuznav-fetch --mode both `
 детерминированно сформировать из уже принятой кампании 2026; parser сохраняет
 канонический `source_path` `gosuslugi2026/competition/<id>/applicants.json`,
 поэтому обновляет существующий конкурс, а не создаёт параллельную запись.
+Direct-ID batch содержит `preserve_metadata=true`: сервер обновляет только
+applications и технические счётчики существующего `source_path`, не доверяя
+неполным metadata-ответам. Неизвестный `source_path` отклоняется.
 
 Для каждого конкурса отправляется отдельный идемпотентный batch с общим `run_id`.
 После полностью успешного прохода парсер отправляет пустой completion batch:

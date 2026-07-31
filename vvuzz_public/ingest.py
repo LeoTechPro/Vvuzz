@@ -176,6 +176,10 @@ def validate_payload(payload: dict) -> None:
             raise ValueError("competition.source_path is too long")
         if not isinstance(competition.get("applications", []), list):
             raise ValueError("competition.applications must be a list")
+        if "preserve_metadata" in competition and not isinstance(
+            competition["preserve_metadata"], bool
+        ):
+            raise ValueError("competition.preserve_metadata must be a boolean")
 
 
 def refresh_and_finalize(
@@ -394,17 +398,31 @@ def ingest_v2(conn: sqlite3.Connection, payload: dict) -> tuple[int, dict]:
                 if existing["campaign_id"] not in {None, campaign["id"]}:
                     raise ValueError("source_path already belongs to another campaign")
                 competition_id = existing["id"]
-                conn.execute(
-                    """
-                    UPDATE competitions_core
-                    SET file_name=?, program_id=?, education_level=?, city=?,
-                        university_id=?, study_form=?, quota_type=?, seats=?,
-                        path_json=?, row_count=?, imported_at=?, campaign_id=?
-                    WHERE id=?
-                    """,
-                    (*values, competition_id),
-                )
+                if item.get("preserve_metadata"):
+                    conn.execute(
+                        """
+                        UPDATE competitions_core
+                        SET row_count=?, imported_at=?, campaign_id=?
+                        WHERE id=?
+                        """,
+                        (len(applications), timestamp, campaign["id"], competition_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE competitions_core
+                        SET file_name=?, program_id=?, education_level=?, city=?,
+                            university_id=?, study_form=?, quota_type=?, seats=?,
+                            path_json=?, row_count=?, imported_at=?, campaign_id=?
+                        WHERE id=?
+                        """,
+                        (*values, competition_id),
+                    )
             else:
+                if item.get("preserve_metadata"):
+                    raise ValueError(
+                        "preserve_metadata requires an existing competition source_path"
+                    )
                 inserted_row = conn.execute(
                     """
                     INSERT INTO competitions_core(

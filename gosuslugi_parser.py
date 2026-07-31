@@ -485,16 +485,26 @@ def write_norm_sqlite(db_path: Path, competitions: list[dict], fetched_at: str) 
         )
         if existing:
             competition_id = existing["id"]
-            conn.execute(
-                """
-                UPDATE competitions_core
-                SET file_name=?, program_id=?, education_level=?, city=?, university_id=?,
-                    study_form=?, quota_type=?, seats=?, path_json=?, row_count=?, imported_at=?
-                WHERE id=?
-                """,
-                values[1:] + (competition_id,),
-            )
+            if comp.get("preserve_metadata"):
+                conn.execute(
+                    "UPDATE competitions_core SET row_count=?, imported_at=? WHERE id=?",
+                    (len(comp.get("applications") or []), fetched_at, competition_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE competitions_core
+                    SET file_name=?, program_id=?, education_level=?, city=?, university_id=?,
+                        study_form=?, quota_type=?, seats=?, path_json=?, row_count=?, imported_at=?
+                    WHERE id=?
+                    """,
+                    values[1:] + (competition_id,),
+                )
         else:
+            if comp.get("preserve_metadata"):
+                raise ValueError(
+                    "preserve_metadata requires an existing competition source_path"
+                )
             competition_id = conn.execute(
                 """
                 INSERT INTO competitions_core(
@@ -812,11 +822,11 @@ def vuznav_application(row: dict) -> dict:
 def vuznav_competition(meta: dict, applicants_data, details_data, fetched_at: str) -> dict:
     applications = [app for app in (vuznav_application(row) for row in first_list(applicants_data, ("applicants", "applications", "items", "list"))) if app["applicant_id"]]
     detail_rows = first_list(details_data or {}, ("items", "groups", "competitionGroups", "competitions"))
-    detail = next((row for row in detail_rows if str(row.get("id")) == str(meta["competition_id"])), detail_rows[0] if detail_rows else {})
-    if meta.get("direct_id") and not detail:
-        raise RuntimeError(
-            f"details are required for direct competition id {meta['competition_id']}"
-        )
+    matched_detail = next(
+        (row for row in detail_rows if str(row.get("id")) == str(meta["competition_id"])),
+        None,
+    )
+    detail = {} if meta.get("direct_id") else (matched_detail or (detail_rows[0] if detail_rows else {}))
     program_labels = detail.get("programLabels") or detail.get("programs") or []
     if isinstance(program_labels, list):
         program = ". ".join(str(item) for item in program_labels if item)
@@ -836,6 +846,7 @@ def vuznav_competition(meta: dict, applicants_data, details_data, fetched_at: st
         "path": path,
         "applications": applications,
         "replace_applications": True,
+        "preserve_metadata": bool(meta.get("direct_id")),
         "fetched_at": fetched_at,
     }
 
@@ -853,8 +864,6 @@ def command_vuznav_fetch(args) -> int:
     if args.campaign_year != 2026:
         raise SystemExit("vuznav-fetch currently supports campaign year 2026 only")
     sources = read_vuznav_sources(args)
-    if any(source.get("direct_id") for source in sources) and not args.fetch_details:
-        raise SystemExit("direct competition IDs require --fetch-details")
     run_id = args.run_id or now_iso().replace(":", "-")
     run_snapshot_at = args.snapshot_at or now_iso()
     raw_archive = RawArchive(args.raw_dir, run_id) if args.mode in {"raw-only", "both"} else None
@@ -877,18 +886,21 @@ def command_vuznav_fetch(args) -> int:
                 print(f"dry-run: competition={meta['competition_id']} mode={args.mode} rpm={args.rpm}")
                 processed += 1
                 continue
-            for key in ("applicants_status", "ratings_status"):
-                limiter.wait()
-                fetched_at = now_iso()
-                payload, content_type, status = vuznav_request(api_urls[key], args.timeout, referer=page_url)
-                digest = sha256_bytes(payload)
-                write_vuznav_raw(raw_archive, {
-                    "run_id": run_id, "url": api_urls[key], "source_key": f"vuznav:{meta['competition_id']}:{key}",
-                    "status_code": status, "content_type": content_type, "bytes": len(payload), "sha256": digest,
-                    "fetched_at": fetched_at, "competition_id": meta["competition_id"], "original_page_url": page_url,
-                }, payload)
-                statuses[key] = load_json_payload(payload, content_type, api_urls[key])
-            has_applicants, has_rating = vuznav_status_flags(statuses)
+            if args.status_checks:
+                for key in ("applicants_status", "ratings_status"):
+                    limiter.wait()
+                    fetched_at = now_iso()
+                    payload, content_type, status = vuznav_request(api_urls[key], args.timeout, referer=page_url)
+                    digest = sha256_bytes(payload)
+                    write_vuznav_raw(raw_archive, {
+                        "run_id": run_id, "url": api_urls[key], "source_key": f"vuznav:{meta['competition_id']}:{key}",
+                        "status_code": status, "content_type": content_type, "bytes": len(payload), "sha256": digest,
+                        "fetched_at": fetched_at, "competition_id": meta["competition_id"], "original_page_url": page_url,
+                    }, payload)
+                    statuses[key] = load_json_payload(payload, content_type, api_urls[key])
+                has_applicants, has_rating = vuznav_status_flags(statuses)
+            else:
+                has_applicants, has_rating = True, False
             if not has_applicants:
                 print(f"skip competition={meta['competition_id']} hasListOfApplicants=false")
                 processed += 1
@@ -1135,6 +1147,7 @@ def build_parser():
     p_vuznav.add_argument("--backoff-seconds", type=int, default=DEFAULT_BACKOFF_SECONDS)
     p_vuznav.add_argument("--dry-run", action="store_true")
     p_vuznav.add_argument("--fetch-details", action=argparse.BooleanOptionalAction, default=True, help="Fetch competition metadata details endpoint.")
+    p_vuznav.add_argument("--status-checks", action=argparse.BooleanOptionalAction, default=True, help="Check list availability before fetching applicants.")
     p_vuznav.add_argument("--fetch-ratings", action=argparse.BooleanOptionalAction, default=False, help="Also fetch ratings endpoint when hasRating=true.")
     p_vuznav.add_argument("--stop-on-error", action="store_true")
     p_vuznav.set_defaults(func=command_vuznav_fetch)

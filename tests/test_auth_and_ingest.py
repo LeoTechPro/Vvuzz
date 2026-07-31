@@ -276,6 +276,82 @@ def test_ingest_v2_replaces_legacy_raw_identity_without_duplicate(migrated_db):
     assert [row["competition_id"] for row in lookup["results"]].count(competition_id) == 1
 
 
+def test_ingest_v2_preserves_existing_competition_metadata(migrated_db):
+    conn = sqlite3.connect(migrated_db)
+    before = conn.execute(
+        """
+        SELECT c.id, c.source_path, c.file_name, c.program_id, c.education_level,
+               c.city, c.university_id, c.study_form, c.quota_type, c.seats,
+               c.path_json
+        FROM competitions_core c
+        JOIN campaigns campaign ON campaign.id=c.campaign_id
+        WHERE campaign.year=2026
+        LIMIT 1
+        """
+    ).fetchone()
+    conn.close()
+    client = client_for(migrated_db)
+    payload = {
+        "campaign_year": 2026,
+        "run_id": "preserve-metadata-run",
+        "source_key": "preserve-metadata-source",
+        "snapshot_at": "2026-07-30T15:00:00+00:00",
+        "competitions": [
+            {
+                "source_path": before[1],
+                "file_name": "wrong.json",
+                "program": "Чужая программа",
+                "university": "Чужой вуз",
+                "seats": 999,
+                "preserve_metadata": True,
+                "replace_applications": True,
+                "applications": [{"applicant_id": "4150096", "ordinal": 1}],
+            }
+        ],
+    }
+    response = client.post(
+        "/api/ingest/v2/batch",
+        json=payload,
+        headers={"X-Vvuzz-Ingest-Token": "test-ingest-token"},
+    )
+    assert response.status_code == 202
+    conn = sqlite3.connect(migrated_db)
+    after = conn.execute(
+        """
+        SELECT c.id, c.source_path, c.file_name, c.program_id, c.education_level,
+               c.city, c.university_id, c.study_form, c.quota_type, c.seats,
+               c.path_json
+        FROM competitions_core c WHERE c.id=?
+        """,
+        (before[0],),
+    ).fetchone()
+    conn.close()
+    assert after == before
+
+
+def test_ingest_v2_rejects_preserve_metadata_for_unknown_competition(migrated_db):
+    client = client_for(migrated_db)
+    response = client.post(
+        "/api/ingest/v2/batch",
+        headers={"X-Vvuzz-Ingest-Token": "test-ingest-token"},
+        json={
+            "campaign_year": 2026,
+            "run_id": "unknown-preserve-run",
+            "source_key": "unknown-preserve-source",
+            "snapshot_at": "2026-07-30T15:00:00+00:00",
+            "competitions": [
+                {
+                    "source_path": "gosuslugi2026/competition/999999/applicants.json",
+                    "preserve_metadata": True,
+                    "applications": [],
+                }
+            ],
+        },
+    )
+    assert response.status_code == 422
+    assert "existing competition" in response.json()["detail"]
+
+
 def test_final_campaign_rejects_ingest(migrated_db):
     client = client_for(migrated_db)
     response = client.post(

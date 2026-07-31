@@ -110,3 +110,23 @@ def test_vuznav_competition_preserves_existing_2026_source_identity():
 
     assert competition["source_path"] == "gosuslugi2026/competition/138272/applicants.json"
     assert competition["file_name"] == "applicants.json"
+
+
+def test_direct_competition_id_preserves_metadata_even_when_details_mismatch():
+    competition = vuznav_competition(
+        {
+            "competition_id": 138272,
+            "organization_id": 0,
+            "okso": "",
+            "education_level": "",
+            "education_form": "",
+            "program_query": "",
+            "direct_id": True,
+        },
+        {"applicants": []},
+        {"items": [{"id": 999999, "organizationName": "Чужой вуз"}]},
+        "2026-07-31T19:00:00+00:00",
+    )
+
+    assert competition["preserve_metadata"] is True
+    assert competition["university"] == "organization:0"
