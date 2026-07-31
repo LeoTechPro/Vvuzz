@@ -47,6 +47,7 @@ def upsert_applications(
     replace: bool,
 ) -> tuple[int, int]:
     by_external_id: dict[str, dict] = {}
+    legacy_external_ids: list[str] = []
     for application in applications:
         external_id = str(application.get("applicant_id") or "").strip()
         if not external_id:
@@ -56,6 +57,8 @@ def upsert_applications(
             if external_id.startswith(f"{campaign_year}:")
             else f"{campaign_year}:{external_id}"
         )
+        if storage_id != external_id:
+            legacy_external_ids.append(external_id)
         by_external_id[storage_id] = application
     external_ids = list(by_external_id)
     conn.executemany(
@@ -75,6 +78,17 @@ def upsert_applications(
         conn.execute("DELETE FROM applications WHERE competition_id = ?", (competition_id,))
         existing_ids: dict[int, int] = {}
     else:
+        for legacy_external_id in legacy_external_ids:
+            conn.execute(
+                """
+                DELETE FROM applications
+                WHERE competition_id = ?
+                  AND applicant_id = (
+                    SELECT id FROM applicants WHERE applicant_id = ?
+                  )
+                """,
+                (competition_id, legacy_external_id),
+            )
         internal_ids = list(applicant_ids.values())
         existing_ids = {}
         for batch in _chunks(internal_ids):

@@ -210,6 +210,59 @@ def test_ingest_v2_rejects_reused_key_with_changed_payload(migrated_db):
     assert response.json()["accepted"] is False
 
 
+def test_ingest_v2_replaces_legacy_raw_identity_without_duplicate(migrated_db):
+    conn = sqlite3.connect(migrated_db)
+    source_path, competition_id = conn.execute(
+        """
+        SELECT c.source_path, c.id
+        FROM competitions_core c
+        JOIN campaigns campaign ON campaign.id=c.campaign_id
+        WHERE campaign.year=2026
+        LIMIT 1
+        """
+    ).fetchone()
+    conn.close()
+    client = client_for(migrated_db)
+    payload = {
+        "campaign_year": 2026,
+        "run_id": "mixed-identity-run",
+        "source_key": "mixed-identity-source",
+        "snapshot_at": "2026-07-30T15:00:00+00:00",
+        "competitions": [
+            {
+                "source_path": source_path,
+                "applications": [
+                    {"applicant_id": "4150096", "ordinal": 7}
+                ],
+            }
+        ],
+    }
+    response = client.post(
+        "/api/ingest/v2/batch",
+        json=payload,
+        headers={"X-Vvuzz-Ingest-Token": "test-ingest-token"},
+    )
+    assert response.status_code == 202
+
+    conn = sqlite3.connect(migrated_db)
+    rows = conn.execute(
+        """
+        SELECT ap.applicant_id
+        FROM applications a
+        JOIN applicants ap ON ap.id=a.applicant_id
+        WHERE a.competition_id=?
+          AND ap.applicant_id IN ('4150096', '2026:4150096')
+        """,
+        (competition_id,),
+    ).fetchall()
+    conn.close()
+    assert rows == [("2026:4150096",)]
+    lookup = client.post(
+        "/api/public/lookup", json={"year": 2026, "applicant_id": "4150096"}
+    ).json()
+    assert [row["competition_id"] for row in lookup["results"]].count(competition_id) == 1
+
+
 def test_final_campaign_rejects_ingest(migrated_db):
     client = client_for(migrated_db)
     response = client.post(

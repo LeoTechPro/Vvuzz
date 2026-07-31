@@ -70,14 +70,14 @@ python .\gosuslugi_parser.py http-probe "https://www.gosuslugi.ru/" --db .\parse
 
 Live probe/crawl по умолчанию ограничен `55` запросами в минуту, но массовый обход Госуслуг до появления списков не запускать.
 
-Production-правило: парсер не создает промежуточные `.xlsx`. Live parser имеет режимы `raw-only`, `norm-only`, `both`. Raw хранится локально в `manifest.jsonl + payloads/*.bin.gz`, на VDS raw не пишется. Удаленная SQLite на VDS пополняется только через `POST /api/ingest/batch`.
+Production-правило: парсер не создает промежуточные `.xlsx`. Live parser имеет режимы `raw-only`, `norm-only`, `both`. Raw хранится локально в `manifest.jsonl + payloads/*.bin.gz`, на VDS raw не пишется. Удаленная SQLite на VDS пополняется только через `POST /api/ingest/v2/batch`.
 
 Пример:
 
 ```powershell
 python .\gosuslugi_parser.py live-crawl --mode both `
   --raw-dir I:\VvuzzRaw `
-  --target ingest+https://vvuzz.intdata.pro/api/ingest/batch `
+  --target ingest+https://vvuzz.intdata.pro/api/ingest/v2/batch `
   --ingest-token <token> `
   --url "https://actual-gosuslugi-endpoint"
 ```

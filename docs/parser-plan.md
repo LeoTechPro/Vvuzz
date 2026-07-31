@@ -21,7 +21,7 @@ Live-парсер обязан поддерживать три режима:
 - `norm-only` - только нормализованные цели: локальная SQLite и/или VDS ingest API;
 - `both` - raw локально плюс нормализованные цели.
 
-Raw на VDS не пишется. Удаленная SQLite на VDS пополняется через `POST /api/ingest/batch`, а не прямой записью в sqlite-файл по сети.
+Raw на VDS не пишется. Удаленная SQLite на VDS пополняется через `POST /api/ingest/v2/batch`, а не прямой записью в sqlite-файл по сети.
 
 ## Ограничения из переписки
 
@@ -109,7 +109,7 @@ Live crawl с локальным raw и удаленным ingest:
 ```powershell
 python .\gosuslugi_parser.py live-crawl --mode both `
   --raw-dir I:\VvuzzRaw `
-  --target ingest+https://vvuzz.intdata.pro/api/ingest/batch `
+  --target ingest+https://vvuzz.intdata.pro/api/ingest/v2/batch `
   --ingest-token <token> `
   --url "https://actual-gosuslugi-endpoint"
 ```
@@ -118,7 +118,7 @@ python .\gosuslugi_parser.py live-crawl --mode both `
 
 - Зафиксирован Вузнавигатор как актуальный источник публичных списков 2026.
 - Добавлен `vuznav-fetch`: одиночный/батчевый fetch URL вида `/vuznavigator/.../applicants/<competition_id>`.
-- Нормальная схема работы: личный ПК получает данные Госуслуг, raw остается локально, VDS SQLite наполняется через `POST /api/ingest/batch`.
+- Нормальная схема работы: личный ПК получает данные Госуслуг, raw остается локально, VDS SQLite наполняется через `POST /api/ingest/v2/batch`.
 - Для Вузнавигатора дефолтный лимит снижен до `10 rpm`.
 - Ingest поддерживает `replace_applications=true` для замены снимка одного конкурса.
 
@@ -128,7 +128,7 @@ python .\gosuslugi_parser.py live-crawl --mode both `
 $env:VVUZZ_INGEST_TOKEN = "<token>"
 python .\gosuslugi_parser.py vuznav-fetch --mode both `
   --raw-dir I:\VvuzzRaw `
-  --target ingest+https://vvuzz.intdata.pro/api/ingest/batch `
+  --target ingest+https://vvuzz.intdata.pro/api/ingest/v2/batch `
   --url "https://www.gosuslugi.ru/vuznavigator/specialties/2.19.03.01/2/1214/1/103736/-/applicants/138272?program=2_1__103736___" `
   --rpm 10
 ```
