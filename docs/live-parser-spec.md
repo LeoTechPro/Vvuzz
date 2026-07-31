@@ -128,10 +128,10 @@ $env:VVUZZ_INGEST_TOKEN = "<token>"
 python .\gosuslugi_parser.py vuznav-fetch --mode both `
   --raw-dir I:\VvuzzRaw `
   --target ingest+https://vvuzz.intdata.pro/api/ingest/v2/batch `
+  --competition-id-file .\vuznavigator-2026-competition-ids.txt `
   --campaign-year 2026 `
   --refresh-stats `
   --no-finalize-campaign `
-  --url "https://www.gosuslugi.ru/vuznavigator/specialties/2.19.03.01/2/1214/1/103736/-/applicants/138272?program=2_1__103736___" `
   --rpm 10
 ```
 
@@ -143,6 +143,11 @@ python .\gosuslugi_parser.py vuznav-fetch --mode both `
 4. пишет raw payload только в `--raw-dir` при `raw-only`/`both`;
 5. нормализует строки в ingest v2 payload и отправляет его в `POST /api/ingest/v2/batch`;
 6. в ingest payload ставит `replace_applications=true`, чтобы новый снимок конкретного конкурса заменял старые строки этого конкурса, а не накапливал дубли.
+
+Полный production-проход принимает `--competition-id-file`. Его можно
+детерминированно сформировать из уже принятой кампании 2026; parser сохраняет
+канонический `source_path` `gosuslugi2026/competition/<id>/applicants.json`,
+поэтому обновляет существующий конкурс, а не создаёт параллельную запись.
 
 Для каждого конкурса отправляется отдельный идемпотентный batch с общим `run_id`.
 После полностью успешного прохода парсер отправляет пустой completion batch:

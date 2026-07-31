@@ -182,7 +182,7 @@ Legacy `/api/ingest/batch` остаётся направлен на старый
 $env:VVUZZ_INGEST_TOKEN = "<token>"
 python .\gosuslugi_parser.py vuznav-fetch --mode both `
   --raw-dir I:\VvuzzRaw `
-  --url-file .\vuznavigator-2026-urls.txt `
+  --competition-id-file .\vuznavigator-2026-competition-ids.txt `
   --target ingest+https://vvuzz.intdata.pro/api/ingest/v2/batch `
   --campaign-year 2026 `
   --refresh-stats `
@@ -196,6 +196,20 @@ python .\gosuslugi_parser.py vuznav-fetch --mode both `
 явными одинаковыми `--run-id` и `--snapshot-at` безопасен при неизменных
 payload. Без этих параметров новый запуск является новым снимком. Raw остаётся
 только на ПК.
+
+ID-manifest формируется на VDS без персональных данных:
+
+```bash
+sqlite3 /int/.runtime/vvuzz-public/data/vuzonline.vds.sqlite \
+  "SELECT CAST(replace(replace(source_path, 'gosuslugi2026/competition/', ''), '/applicants.json', '') AS INTEGER)
+   FROM competitions_core c JOIN campaigns ca ON ca.id=c.campaign_id
+   WHERE ca.year=2026 AND source_path GLOB 'gosuslugi2026/competition/*/applicants.json'
+   ORDER BY 1" > /int/.tmp/codex-agent/vuznavigator-2026-competition-ids.txt
+```
+
+Перед запуском файл копируется на доверенный ПК. Получение данных с VDS или
+VPN-заблокированного контура запрещено; ответ `/vpn-block` завершает run без
+completion batch.
 
 После production-переключения устанавливается
 `deploy/systemd/vvuzz-public.service`. Beta unit останавливается, но сохраняется

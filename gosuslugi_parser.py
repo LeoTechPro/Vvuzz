@@ -653,6 +653,58 @@ def parse_vuznav_url(url: str) -> dict:
     return data
 
 
+def vuznav_meta_from_competition_id(competition_id: int) -> dict:
+    if competition_id <= 0:
+        raise SystemExit(f"invalid competition id: {competition_id}")
+    return {
+        "competition_id": competition_id,
+        "organization_id": 0,
+        "okso": "",
+        "education_level": "",
+        "education_form": "",
+        "program_query": "",
+        "url": "https://www.gosuslugi.ru/vuznavigator/",
+        "direct_id": True,
+    }
+
+
+def read_vuznav_sources(args) -> list[dict]:
+    sources = [parse_vuznav_url(url) for url in read_optional_lines(args.url, args.url_file)]
+    competition_ids = list(args.competition_id or [])
+    if args.competition_id_file:
+        for line_number, line in enumerate(
+            args.competition_id_file.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            value = line.strip()
+            if not value or value.startswith("#"):
+                continue
+            if not value.isdigit():
+                raise SystemExit(
+                    f"invalid competition id at {args.competition_id_file}:{line_number}"
+                )
+            competition_ids.append(int(value))
+    sources.extend(vuznav_meta_from_competition_id(value) for value in competition_ids)
+    unique = {}
+    for source in sources:
+        unique.setdefault(source["competition_id"], source)
+    if not unique:
+        raise SystemExit(
+            "vuznav-fetch needs --url/--url-file or --competition-id/--competition-id-file"
+        )
+    return list(unique.values())
+
+
+def read_optional_lines(values, path: Path | None) -> list[str]:
+    result = list(values or [])
+    if path:
+        result.extend(
+            line.strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+    return result
+
+
 def build_vuznav_api_urls(meta: dict) -> dict:
     competition_id = meta["competition_id"]
     return {
@@ -761,6 +813,10 @@ def vuznav_competition(meta: dict, applicants_data, details_data, fetched_at: st
     applications = [app for app in (vuznav_application(row) for row in first_list(applicants_data, ("applicants", "applications", "items", "list"))) if app["applicant_id"]]
     detail_rows = first_list(details_data or {}, ("items", "groups", "competitionGroups", "competitions"))
     detail = next((row for row in detail_rows if str(row.get("id")) == str(meta["competition_id"])), detail_rows[0] if detail_rows else {})
+    if meta.get("direct_id") and not detail:
+        raise RuntimeError(
+            f"details are required for direct competition id {meta['competition_id']}"
+        )
     program_labels = detail.get("programLabels") or detail.get("programs") or []
     if isinstance(program_labels, list):
         program = ". ".join(str(item) for item in program_labels if item)
@@ -768,8 +824,8 @@ def vuznav_competition(meta: dict, applicants_data, details_data, fetched_at: st
         program = str(program_labels or "")
     path = ["gosuslugi", "vuznavigator", str(meta["competition_id"])]
     return {
-        "source_path": f"gosuslugi:vuznavigator:competition:{meta['competition_id']}:applicants",
-        "file_name": f"vuznavigator-{meta['competition_id']}-applicants.json",
+        "source_path": f"gosuslugi2026/competition/{meta['competition_id']}/applicants.json",
+        "file_name": "applicants.json",
         "program": program or detail.get("program") or meta.get("program_query") or meta.get("okso"),
         "education_level": str(detail.get("educationLevel") or meta.get("education_level") or ""),
         "city": detail.get("city") or detail.get("regionName"),
@@ -794,7 +850,11 @@ def write_vuznav_raw(raw_archive: RawArchive | None, record: dict, payload: byte
 
 
 def command_vuznav_fetch(args) -> int:
-    urls = read_urls(args)
+    if args.campaign_year != 2026:
+        raise SystemExit("vuznav-fetch currently supports campaign year 2026 only")
+    sources = read_vuznav_sources(args)
+    if any(source.get("direct_id") for source in sources) and not args.fetch_details:
+        raise SystemExit("direct competition IDs require --fetch-details")
     run_id = args.run_id or now_iso().replace(":", "-")
     run_snapshot_at = args.snapshot_at or now_iso()
     raw_archive = RawArchive(args.raw_dir, run_id) if args.mode in {"raw-only", "both"} else None
@@ -806,8 +866,8 @@ def command_vuznav_fetch(args) -> int:
     limiter = RateLimiter(args.rpm)
     processed = 0
     errors = 0
-    for page_url in urls:
-        meta = parse_vuznav_url(page_url)
+    for meta in sources:
+        page_url = meta["url"]
         api_urls = build_vuznav_api_urls(meta)
         statuses = {}
         payloads = {}
@@ -1059,6 +1119,8 @@ def build_parser():
     p_vuznav.add_argument("--mode", choices=["raw-only", "norm-only", "both"], required=True)
     p_vuznav.add_argument("--url", action="append", help="Vuznavigator applicants URL. Can be repeated.")
     p_vuznav.add_argument("--url-file", type=Path, help="Text file with one Vuznavigator applicants URL per line.")
+    p_vuznav.add_argument("--competition-id", type=int, action="append", help="Competition group ID. Can be repeated.")
+    p_vuznav.add_argument("--competition-id-file", type=Path, help="Text file with one competition group ID per line.")
     p_vuznav.add_argument("--raw-dir", type=Path, default=RAW_DIR)
     p_vuznav.add_argument("--target", action="append", help="sqlite://path or ingest+https://host/api/ingest/v2/batch. Can be repeated.")
     p_vuznav.add_argument("--ingest-token", default=os.getenv("VVUZZ_INGEST_TOKEN", ""))
