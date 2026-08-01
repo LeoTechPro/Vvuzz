@@ -22,6 +22,8 @@ DEFAULT_SANDBOX_DB = PROJECT_DIR / "parser_sandbox.sqlite"
 RAW_DIR = PROJECT_DIR / "raw" / "gosuslugi"
 DEFAULT_RPM = 55
 DEFAULT_BACKOFF_SECONDS = 3 * 60 * 60
+DEFAULT_INGEST_BATCH_SIZE = 1
+DEFAULT_INGEST_MAX_BYTES = 20 * 1024 * 1024
 
 
 PARSER_SCHEMA = """
@@ -581,6 +583,54 @@ def post_ingest(target_url: str, token: str, batch: dict, timeout: int) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def json_size_bytes(value) -> int:
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+
+
+def vuznav_batch_source_key(run_id: str, competitions: list[dict]) -> str:
+    source_paths = [str(competition["source_path"]) for competition in competitions]
+    digest = hashlib.sha256("\n".join(source_paths).encode("utf-8")).hexdigest()[:16]
+    return f"gosuslugi2026/run/{run_id}/batch/{digest}.json"
+
+
+def build_vuznav_ingest_batch(args, run_id: str, snapshot_at: str, competitions: list[dict]) -> dict:
+    return build_ingest_batch(
+        api_version=args.ingest_version,
+        campaign_year=args.campaign_year,
+        run_id=run_id,
+        source="gosuslugi_vuznavigator",
+        source_key=(
+            competitions[0]["source_path"]
+            if len(competitions) == 1
+            else vuznav_batch_source_key(run_id, competitions)
+        ),
+        snapshot_at=snapshot_at,
+        competitions=competitions,
+        config={"competition_count": len(competitions)},
+    )
+
+
+def post_vuznav_ingest_batch(args, targets, run_id: str, snapshot_at: str, competitions: list[dict]) -> None:
+    if not competitions:
+        return
+    batch = build_vuznav_ingest_batch(args, run_id, snapshot_at, competitions)
+    payload_bytes = json_size_bytes(batch)
+    if payload_bytes > args.ingest_max_bytes:
+        raise RuntimeError(
+            f"ingest batch is {payload_bytes} bytes, above --ingest-max-bytes={args.ingest_max_bytes}"
+        )
+    for kind, target in targets:
+        if kind != "ingest":
+            continue
+        if not args.ingest_token:
+            raise SystemExit("ingest target needs --ingest-token or VVUZZ_INGEST_TOKEN")
+        result = post_ingest(target, args.ingest_token, batch, args.timeout)
+        print(
+            f"ingest target={target} competitions={len(competitions)} bytes={payload_bytes} result={result}",
+            flush=True,
+        )
+
+
 def build_ingest_batch(
     *,
     api_version: str,
@@ -864,6 +914,10 @@ def write_vuznav_raw(raw_archive: RawArchive | None, record: dict, payload: byte
 def command_vuznav_fetch(args) -> int:
     if args.campaign_year != 2026:
         raise SystemExit("vuznav-fetch currently supports campaign year 2026 only")
+    if args.ingest_batch_size <= 0:
+        raise SystemExit("--ingest-batch-size must be positive")
+    if args.ingest_max_bytes <= 0:
+        raise SystemExit("--ingest-max-bytes must be positive")
     sources = read_vuznav_sources(args)
     run_id = args.run_id or now_iso().replace(":", "-")
     run_snapshot_at = args.snapshot_at or now_iso()
@@ -876,6 +930,7 @@ def command_vuznav_fetch(args) -> int:
     limiter = RateLimiter(args.rpm)
     processed = 0
     errors = 0
+    pending_ingest = []
     for meta in sources:
         page_url = meta["url"]
         api_urls = build_vuznav_api_urls(meta)
@@ -940,26 +995,43 @@ def command_vuznav_fetch(args) -> int:
                 }, rating_payload)
             competition = vuznav_competition(meta, applicants_data, details_data, fetched_at)
             if args.mode in {"norm-only", "both"}:
-                batch = build_ingest_batch(
-                    api_version=args.ingest_version,
-                    campaign_year=args.campaign_year,
-                    run_id=run_id,
-                    source="gosuslugi_vuznavigator",
-                    source_key=competition["source_path"],
-                    snapshot_at=run_snapshot_at if args.ingest_version == "v2" else fetched_at,
-                    competitions=[competition],
-                    payload_sha256=digest,
-                    config={"source_url": page_url, "competition_id": meta["competition_id"]},
-                )
                 for kind, target in targets:
                     if kind == "sqlite":
                         comp_count, app_count = write_norm_sqlite(Path(target), [competition], fetched_at)
                         print(f"sqlite target={target} competitions={comp_count} applications={app_count}")
+                if any(kind == "ingest" for kind, _ in targets) and args.ingest_version == "legacy":
+                    legacy_batch = build_ingest_batch(
+                        api_version="legacy",
+                        campaign_year=args.campaign_year,
+                        run_id=run_id,
+                        source="gosuslugi_vuznavigator",
+                        source_key=competition["source_path"],
+                        snapshot_at=fetched_at,
+                        competitions=[competition],
+                        payload_sha256=digest,
+                        config={"source_url": page_url, "competition_id": meta["competition_id"]},
+                    )
+                    for kind, target in targets:
+                        if kind == "ingest":
+                            if not args.ingest_token:
+                                raise SystemExit("ingest target needs --ingest-token or VVUZZ_INGEST_TOKEN")
+                            result = post_ingest(target, args.ingest_token, legacy_batch, args.timeout)
+                            print(f"ingest target={target} result={result}")
+                elif any(kind == "ingest" for kind, _ in targets):
+                    snapshot_at = run_snapshot_at if args.ingest_version == "v2" else fetched_at
+                    candidate = pending_ingest + [competition]
+                    candidate_batch = build_vuznav_ingest_batch(args, run_id, snapshot_at, candidate)
+                    if pending_ingest and (
+                        len(candidate) > args.ingest_batch_size
+                        or json_size_bytes(candidate_batch) > args.ingest_max_bytes
+                    ):
+                        post_vuznav_ingest_batch(args, targets, run_id, snapshot_at, pending_ingest)
+                        pending_ingest = [competition]
                     else:
-                        if not args.ingest_token:
-                            raise SystemExit("ingest target needs --ingest-token or VVUZZ_INGEST_TOKEN")
-                        result = post_ingest(target, args.ingest_token, batch, args.timeout)
-                        print(f"ingest target={target} result={result}")
+                        pending_ingest = candidate
+                    if len(pending_ingest) >= args.ingest_batch_size:
+                        post_vuznav_ingest_batch(args, targets, run_id, snapshot_at, pending_ingest)
+                        pending_ingest = []
             print(f"vuznav competition={meta['competition_id']} applicants={len(competition['applications'])} rating={has_rating}")
             processed += 1
         except urllib.error.HTTPError as exc:
@@ -976,6 +1048,7 @@ def command_vuznav_fetch(args) -> int:
             if args.stop_on_error:
                 return 1
     if errors == 0 and not args.dry_run:
+        post_vuznav_ingest_batch(args, targets, run_id, run_snapshot_at, pending_ingest)
         finish_v2_ingest(args, targets, run_id, run_snapshot_at)
     print(f"vuznav-fetch done processed={processed} errors={errors} run_id={run_id}")
     return 0 if errors == 0 else 1
@@ -1145,6 +1218,8 @@ def build_parser():
     p_vuznav.add_argument("--snapshot-at", help="Stable ISO 8601 timestamp for all v2 batches in this run.")
     p_vuznav.add_argument("--rpm", type=int, default=10, help="Conservative default for Gosuslugi public-service endpoints.")
     p_vuznav.add_argument("--timeout", type=int, default=30)
+    p_vuznav.add_argument("--ingest-batch-size", type=int, default=DEFAULT_INGEST_BATCH_SIZE)
+    p_vuznav.add_argument("--ingest-max-bytes", type=int, default=DEFAULT_INGEST_MAX_BYTES)
     p_vuznav.add_argument("--backoff-seconds", type=int, default=DEFAULT_BACKOFF_SECONDS)
     p_vuznav.add_argument("--dry-run", action="store_true")
     p_vuznav.add_argument("--fetch-details", action=argparse.BooleanOptionalAction, default=True, help="Fetch competition metadata details endpoint.")

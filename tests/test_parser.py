@@ -1,9 +1,15 @@
 import argparse
 
+import pytest
+
 from gosuslugi_parser import (
     build_ingest_batch,
+    build_parser,
+    build_vuznav_ingest_batch,
     finish_v2_ingest,
     read_vuznav_sources,
+    post_vuznav_ingest_batch,
+    vuznav_batch_source_key,
     vuznav_competition,
 )
 
@@ -130,3 +136,73 @@ def test_direct_competition_id_preserves_metadata_even_when_details_mismatch():
 
     assert competition["preserve_metadata"] is True
     assert competition["university"] == "organization:0"
+
+
+def test_vuznav_batch_source_key_is_stable_and_order_sensitive():
+    competitions = [
+        {"source_path": "gosuslugi2026/competition/42/applicants.json"},
+        {"source_path": "gosuslugi2026/competition/43/applicants.json"},
+    ]
+
+    first = vuznav_batch_source_key("run-1", competitions)
+    second = vuznav_batch_source_key("run-1", list(competitions))
+
+    assert first == second
+    assert first.startswith("gosuslugi2026/run/run-1/batch/")
+    assert first != vuznav_batch_source_key("run-1", list(reversed(competitions)))
+
+
+def test_vuznav_multi_competition_batch_keeps_v2_contract():
+    args = argparse.Namespace(ingest_version="v2", campaign_year=2026)
+    competitions = [
+        {"source_path": "gosuslugi2026/competition/42/applicants.json", "applications": []},
+        {"source_path": "gosuslugi2026/competition/43/applicants.json", "applications": []},
+    ]
+
+    batch = build_vuznav_ingest_batch(
+        args, "run-1", "2026-07-31T18:00:00+00:00", competitions
+    )
+
+    assert batch["competitions"] == competitions
+    assert batch["refresh_stats"] is False
+    assert batch["finalize_campaign"] is False
+    assert batch["source_key"] == vuznav_batch_source_key("run-1", competitions)
+
+
+def test_vuznav_default_keeps_one_competition_per_ingest_request():
+    args = build_parser().parse_args(
+        ["vuznav-fetch", "--mode", "raw-only", "--competition-id", "42"]
+    )
+
+    assert args.ingest_batch_size == 1
+    assert args.ingest_max_bytes == 20 * 1024 * 1024
+
+
+def test_vuznav_ingest_refuses_payload_above_hard_limit(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "gosuslugi_parser.post_ingest",
+        lambda *values: calls.append(values) or {"accepted": True},
+    )
+    args = argparse.Namespace(
+        ingest_version="v2",
+        campaign_year=2026,
+        ingest_token="secret",
+        timeout=30,
+        ingest_max_bytes=100,
+    )
+    competition = {
+        "source_path": "gosuslugi2026/competition/42/applicants.json",
+        "applications": [{"applicant_id": "x" * 200}],
+    }
+
+    with pytest.raises(RuntimeError, match="above --ingest-max-bytes"):
+        post_vuznav_ingest_batch(
+            args,
+            [("ingest", "https://vvuzz.intdata.pro/api/ingest/v2/batch")],
+            "run-1",
+            "2026-07-31T18:00:00+00:00",
+            [competition],
+        )
+
+    assert calls == []
