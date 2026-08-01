@@ -240,3 +240,38 @@ Rollback runtime не требует отката DB:
 4. Проверить старую главную, публичный поиск и legacy ingest.
 
 Новые таблицы остаются на месте; старый reader их не использует.
+## Изолированный production ingest worker
+
+Публичный HTTP-трафик обслуживает `vvuzz-public.service` на `127.0.0.1:9186`.
+Длительные транзакции ingest v2 обслуживает отдельный `vvuzz-ingest.service` на
+`127.0.0.1:9187`. Оба процесса используют одну каноническую SQLite в WAL-режиме:
+`/int/.runtime/vvuzz-public/data/vuzonline.vds.sqlite`.
+
+Установка и проверка:
+
+```bash
+sudo install -o root -g root -m 0644 deploy/systemd/vvuzz-ingest.service /etc/systemd/system/vvuzz-ingest.service
+sudo install -o root -g root -m 0644 deploy/nginx/vvuzz-public-production.conf.example /etc/nginx/snippets/vvuzz-public-production.conf
+sudo systemctl daemon-reload
+sudo systemctl enable --now vvuzz-ingest.service
+sudo nginx -t
+sudo systemctl reload nginx
+systemctl is-active vvuzz-public.service vvuzz-ingest.service
+```
+
+Перед возобновлением полного run проверяются localhost-порты `9186` и `9187`,
+отказ ingest без токена, публичный health/lookup во время тестового v2 ingest,
+RSS обоих workers, load, available RAM, swap и свободное место. Raw на VDS не
+пишется, отдельная копия SQLite не создаётся.
+
+Controlled rollback:
+
+1. В `/etc/nginx/snippets/vvuzz-public-production.conf` вернуть upstream exact-route
+   `/api/ingest/v2/batch` с `127.0.0.1:9187` на `127.0.0.1:9186`.
+2. Выполнить `sudo nginx -t && sudo systemctl reload nginx`.
+3. Выполнить `sudo systemctl disable --now vvuzz-ingest.service`.
+4. Проверить public health/lookup и отказ ingest без токена.
+5. Для возврата снова включить unit, вернуть upstream `9187`, проверить и reload Nginx.
+
+Legacy route `/api/ingest/batch`, `vvuzz-online.service`, файлы БД и legacy-код
+при этих операциях не изменяются и не удаляются.

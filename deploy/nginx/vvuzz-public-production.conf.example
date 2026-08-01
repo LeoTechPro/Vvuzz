@@ -54,7 +54,8 @@ location = /api/ingest/v2/batch {
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_read_timeout 120s;
-    proxy_pass http://127.0.0.1:9186/api/ingest/v2/batch;
+    proxy_pass http://127.0.0.1:9187/api/ingest/v2/batch;
 }
 
-# The legacy /api/ingest/batch route stays available as the documented rollback target.
+# Rollback for v2: point this exact route back to 127.0.0.1:9186, test and reload Nginx,
+# then stop and disable vvuzz-ingest.service. Legacy /api/ingest/batch is unchanged.
