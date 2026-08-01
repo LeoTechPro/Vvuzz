@@ -567,7 +567,7 @@ def write_norm_sqlite(db_path: Path, competitions: list[dict], fetched_at: str) 
     return comp_count, app_count
 
 
-def post_ingest(target_url: str, token: str, batch: dict, timeout: int) -> dict:
+def post_ingest(target_url: str, token: str, batch: dict, timeout: int, retries: int = 2) -> dict:
     payload = json.dumps(batch, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         target_url,
@@ -579,8 +579,23 @@ def post_ingest(target_url: str, token: str, batch: dict, timeout: int) -> dict:
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+            if attempt >= retries:
+                raise
+            delay = 5 * (attempt + 1)
+            print(
+                f"transient ingest error for {target_url}; retry={attempt + 1}/{retries} delay={delay}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delay)
+    raise RuntimeError("unreachable ingest retry state")
 
 
 def json_size_bytes(value) -> int:

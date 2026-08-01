@@ -9,6 +9,7 @@ from gosuslugi_parser import (
     finish_v2_ingest,
     read_vuznav_sources,
     post_vuznav_ingest_batch,
+    post_ingest,
     vuznav_batch_source_key,
     vuznav_competition,
     vuznav_request,
@@ -255,5 +256,54 @@ def test_vuznav_request_does_not_retry_http_error(monkeypatch):
 
     with pytest.raises(__import__("urllib.error").error.HTTPError):
         vuznav_request("https://www.gosuslugi.ru/api/example", 30)
+
+    assert len(attempts) == 1
+
+
+def test_post_ingest_retries_exact_payload_after_transient_error(monkeypatch):
+    requests = []
+    sleeps = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"accepted": true, "duplicate": true}'
+
+    def urlopen(request, timeout):
+        requests.append((request.data, timeout))
+        if len(requests) == 1:
+            raise TimeoutError("transient ingest timeout")
+        return Response()
+
+    monkeypatch.setattr("gosuslugi_parser.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("gosuslugi_parser.time.sleep", sleeps.append)
+    batch = {"run_id": "run-1", "source_key": "batch-1", "competitions": []}
+
+    result = post_ingest("https://vvuzz.intdata.pro/api/ingest/v2/batch", "secret", batch, 30)
+
+    assert result == {"accepted": True, "duplicate": True}
+    assert len(requests) == 2
+    assert requests[0][0] == requests[1][0]
+    assert sleeps == [5]
+
+
+def test_post_ingest_does_not_retry_http_error(monkeypatch):
+    attempts = []
+
+    def urlopen(request, timeout):
+        attempts.append(request.full_url)
+        raise __import__("urllib.error").error.HTTPError(
+            request.full_url, 401, "unauthorized", {}, None
+        )
+
+    monkeypatch.setattr("gosuslugi_parser.urllib.request.urlopen", urlopen)
+
+    with pytest.raises(__import__("urllib.error").error.HTTPError):
+        post_ingest("https://vvuzz.intdata.pro/api/ingest/v2/batch", "bad", {}, 30)
 
     assert len(attempts) == 1
