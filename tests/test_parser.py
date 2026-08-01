@@ -11,6 +11,7 @@ from gosuslugi_parser import (
     post_vuznav_ingest_batch,
     vuznav_batch_source_key,
     vuznav_competition,
+    vuznav_request,
 )
 
 
@@ -206,3 +207,53 @@ def test_vuznav_ingest_refuses_payload_above_hard_limit(monkeypatch):
         )
 
     assert calls == []
+
+
+def test_vuznav_request_retries_transient_network_error(monkeypatch):
+    attempts = []
+
+    class Response:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def urlopen(request, timeout):
+        attempts.append((request.full_url, timeout))
+        if len(attempts) < 3:
+            raise ConnectionResetError("transient reset")
+        return Response()
+
+    monkeypatch.setattr("gosuslugi_parser.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("gosuslugi_parser.time.sleep", lambda seconds: None)
+
+    payload, content_type, status = vuznav_request(
+        "https://www.gosuslugi.ru/api/example", 30
+    )
+
+    assert (payload, content_type, status) == (b"{}", "application/json", 200)
+    assert len(attempts) == 3
+
+
+def test_vuznav_request_does_not_retry_http_error(monkeypatch):
+    attempts = []
+
+    def urlopen(request, timeout):
+        attempts.append(request.full_url)
+        raise __import__("urllib.error").error.HTTPError(
+            request.full_url, 429, "rate limited", {}, None
+        )
+
+    monkeypatch.setattr("gosuslugi_parser.urllib.request.urlopen", urlopen)
+
+    with pytest.raises(__import__("urllib.error").error.HTTPError):
+        vuznav_request("https://www.gosuslugi.ru/api/example", 30)
+
+    assert len(attempts) == 1

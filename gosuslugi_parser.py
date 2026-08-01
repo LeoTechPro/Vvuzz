@@ -777,7 +777,14 @@ def build_vuznav_api_urls(meta: dict) -> dict:
     }
 
 
-def vuznav_request(url: str, timeout: int, method: str = "GET", body: dict | None = None, referer: str | None = None) -> tuple[bytes, str | None, int]:
+def vuznav_request(
+    url: str,
+    timeout: int,
+    method: str = "GET",
+    body: dict | None = None,
+    referer: str | None = None,
+    retries: int = 3,
+) -> tuple[bytes, str | None, int]:
     headers = {
         "User-Agent": "VvuzzVuzNavigatorFetcher/0.1 (+local owner-run; rate-limited)",
         "Accept": "application/json,text/plain,*/*",
@@ -789,8 +796,23 @@ def vuznav_request(url: str, timeout: int, method: str = "GET", body: dict | Non
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json; charset=utf-8"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read(), response.headers.get("Content-Type"), response.status
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read(), response.headers.get("Content-Type"), response.status
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+            if attempt >= retries:
+                raise
+            delay = min(2 ** attempt, 8)
+            print(
+                f"transient network error for {url}; retry={attempt + 1}/{retries} delay={delay}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delay)
+    raise RuntimeError("unreachable retry state")
 
 
 def load_json_payload(payload: bytes, content_type: str | None, url: str):
