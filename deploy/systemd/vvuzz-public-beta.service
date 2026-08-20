@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=agents
+User=dev
 Group=intdata
 WorkingDirectory=/int/vvuzz
 Environment=PYTHONUNBUFFERED=1
