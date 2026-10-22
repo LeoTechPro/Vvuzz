@@ -58,3 +58,7 @@ python .\gosuslugi_parser.py fixture-run --db .\parser_sandbox.sqlite --limit 20
 python .\gosuslugi_parser.py http-probe "https://www.gosuslugi.ru/" --db .\parser_sandbox.sqlite --dry-run
 python .\gosuslugi_parser.py live-crawl --mode raw-only --raw-dir I:\VvuzzRaw --url "https://www.gosuslugi.ru/" --dry-run
 ```
+
+## Интерфейс и разметка
+
+Избегайте ненужных вторичных меток и описаний. Пусть разметка сама всё объясняет.
