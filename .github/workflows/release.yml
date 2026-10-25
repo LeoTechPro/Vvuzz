@@ -1,0 +1,68 @@
+name: Build Vvuzz 0.0.1
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v0.0.1']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - run: go test -tags headless ./...
+      - run: go build -trimpath -ldflags '-s -w -H=windowsgui' -o dist/vvuzz.exe ./cmd/vvuzz
+      - name: Build per-user installer
+        shell: pwsh
+        run: |
+          $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          & $compiler /DSourceDir="$pwd\dist" /DOutputDir="$pwd\dist" packaging/windows/vvuzz.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./dist/vvuzz.exe --version
+      - name: Verify installation and local runtime
+        shell: pwsh
+        run: |
+          $installPath = Join-Path $env:RUNNER_TEMP 'vvuzz-installed'
+          $setup = Start-Process -WindowStyle Hidden -FilePath ./dist/vvuzz-0.0.1-windows-amd64-setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$installPath" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw 'Installer failed' }
+          $app = Start-Process -WindowStyle Hidden -FilePath "$installPath/vvuzz.exe" -ArgumentList '--no-tray','--port','19177','--data',"$env:RUNNER_TEMP/vvuzz-smoke" -PassThru
+          try {
+            $state = $null
+            for ($i=0; $i -lt 30; $i++) {
+              try { $state = Invoke-RestMethod http://127.0.0.1:19177/api/state -TimeoutSec 2; break } catch { Start-Sleep -Seconds 1 }
+            }
+            if ($state.version -ne '0.0.1') { throw 'Installed runtime did not respond' }
+            if (-not (Test-Path "$installPath/licenses/Go/LICENSE")) { throw 'License bundle missing' }
+          } finally { Stop-Process -Id $app.Id -ErrorAction SilentlyContinue }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: dist/*setup.exe
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev xvfb dbus-x11
+      - run: go test -race -tags headless ./...
+      - run: sh packaging/linux/package.sh "$RUNNER_TEMP/vvuzz-release"
+      - name: Verify package and desktop startup
+        run: |
+          set -eu
+          sudo dpkg -i "$RUNNER_TEMP/vvuzz-release/vvuzz-0.0.1-linux-amd64.deb"
+          vvuzz --version | grep '^0.0.1$'
+          dbus-run-session -- xvfb-run -a sh -c 'vvuzz --data "$RUNNER_TEMP/vvuzz-smoke" & pid=$!; trap "kill $pid 2>/dev/null || true" EXIT; for i in $(seq 1 30); do if curl -fsS http://127.0.0.1:9177/api/state > "$RUNNER_TEMP/vvuzz-state.json"; then break; fi; sleep 1; done; grep -q "0.0.1" "$RUNNER_TEMP/vvuzz-state.json"; kill -TERM $pid; wait $pid'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: |
+            ${{ runner.temp }}/vvuzz-release/*.deb
+            ${{ runner.temp }}/vvuzz-release/*.tar.gz
+            ${{ runner.temp }}/vvuzz-release/*headless

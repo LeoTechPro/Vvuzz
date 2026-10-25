@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Vvuzz
+Comment=Local admissions list monitor
+Comment[ru]=Локальное наблюдение за поступлением
+Exec=vvuzz
+Icon=vvuzz
+Terminal=false
+Categories=Education;Utility;
+StartupNotify=false

@@ -1,62 +1,29 @@
-# AGENTS.md для `vvuzz-online`
+# Vvuzz: правила работы
 
-## Scope
+Подчиняется родительскому workspace contract в managed checkout.
 
-Этот репозиторий содержит локальный прототип Vvuzz Online: интерфейс и parser scaffold для анализа публичных списков поступления в вуз.
+## Поддерживаемый продукт
 
-## Source Of Truth
+С 25.10.2026 Vvuzz — локальное Go-приложение 0.0.1 для Windows/Linux: `cmd/vvuzz`, `internal/monitor`, embedded UI и tray. Источник требований: `openspec/changes/make-vvuzz-local-open-source/`; установка и сборка: README.md; данные: docs/DATA.md.
 
-- ТЗ: `docs/tz.md`
-- Изученные факты и ограничения: `docs/facts.md`
-- План парсера: `docs/parser-plan.md`
-- Спецификация live parser / ingest / raw: `docs/live-parser-spec.md`
-- UI/backend: `app.py`
-- Импорт исторического архива: `import_zip_to_sqlite.py`
-- Parser scaffold: `gosuslugi_parser.py`
+- HTTP только 127.0.0.1; сохранять Host/Origin/custom-header boundary.
+- Исторические SQLite открывать mode=ro, query_only; monitor.sqlite хранить отдельно в профиле пользователя.
+- Сохранять last-good при сетевой/схемной ошибке, общий cooldown источника, лимиты и persisted state.
+- Не создавать аккаунтов, hosted ingest или зависимость от нашего сервера в поддерживаемом runtime.
+- Не удалять и не перемещать исходные данные, журналы, чужие изменения и historical source без отдельного точного разрешения. Резервные копии требуют предварительного согласования.
+- Большие SQLite, raw, ZIP, видео и runtime state не коммитить. Для публичного набора создавать новый whitelist export; запрещено публиковать исходные БД с auth/служебными таблицами или «очищенную» копию с потенциально оставшимися free pages.
+- MIT относится к нашему коду, а не ко всем правам на исходные данные. Не утверждать проверенную лицензию источника без доказательства.
+- Каждый UI change: финальные реальные screenshots, desktop/mobile, непосредственный просмотр и доставка инициатору. Визуальное закрытие требует его явного согласия; публикация уже разрешённого результата продолжается независимо.
+- Проверки по owning boundary, без дублирующих тестов для одного риска. Релиз только 0.0.1 по прямому поручению; не обещать будущую поддержку.
+- Избегать ненужных вторичных меток и описаний.
 
-Исходные большие материалы лежат вне git:
+## Историческая Python-платформа
 
-- `I:\Мой диск\Vvuzz\2025-07-24 13-40-58.zip`
-- `I:\Мой диск\Vvuzz\2026-04-16 13-15-49.mp4`
-- локальные SQLite-файлы `*.sqlite`
+`app.py`, `vvuzz_public`, `gosuslugi_parser.py`, `migrations`, прежние deploy units и документы сохранены как неподдерживаемое исследовательское наследие. Их правила ниже относятся к этому историческому контуру, а не требуют разворачивать его в новой версии.
 
-## Rules
-
-- Production/live-парсер должен наполнять только SQLite, без промежуточной генерации `.xlsx`.
-- `.xlsx` допустимы только как исторический fixture-источник из архива 2025 или как отдельный будущий экспорт из SQLite по явной задаче.
-- Live parser обязан иметь режимы `raw-only`, `norm-only`, `both`.
-- Raw payload хранить только на личном ПК/локальном пути. На VDS raw не писать.
-- Удаленную SQLite на VDS наполнять только через основной ingest v2 API (`POST /api/ingest/v2/batch`), а не прямой записью в sqlite-файл по сети. Legacy `POST /api/ingest/batch` сохраняется только как переходный rollback-контур.
-- Большие данные, SQLite, zip, mp4, логи и raw dumps не коммитить.
-- Для больших повторных импортов SQLite сначала собирать БД на локальном диске, проверять `PRAGMA integrity_check`, затем копировать готовый файл в рабочую папку.
-- Не удалять старые БД, smoke-файлы, журналы или поврежденные артефакты без явного разрешения пользователя.
-- Пароли в `users.password_text` намеренно хранятся открытым текстом: это защита от случайного входа, не production security.
-- Роли: `admin`, `manager`, `applicant`.
-- `admin` управляет пользователями через `/admin/users`; `manager` видит аналитические таблицы; `applicant` видит привязанный `applicant_id`.
-- Публичный интерфейс `/public` доступен без логина, но не дает переходить по страницам соперников.
-
-## Run
-
-```powershell
-python .\app.py --host 127.0.0.1 --port 8765
-```
-
-Открыть:
-
-```text
-http://127.0.0.1:8765
-```
-
-Логин по умолчанию: `prointdata@ya.ru`
-Пароль по умолчанию: `admin`
-
-## Parser Smoke
-
-```powershell
-python .\gosuslugi_parser.py seed-fixtures --db .\parser_sandbox.sqlite --limit 50
-python .\gosuslugi_parser.py fixture-run --db .\parser_sandbox.sqlite --limit 20
-python .\gosuslugi_parser.py http-probe "https://www.gosuslugi.ru/" --db .\parser_sandbox.sqlite --dry-run
-python .\gosuslugi_parser.py live-crawl --mode raw-only --raw-dir I:\VvuzzRaw --url "https://www.gosuslugi.ru/" --dry-run
-```
-
-Избегайте ненужных вторичных меток и описаний. Пусть разметка сама всё объясняет.
+- Production/live parser пишет SQLite, не промежуточные XLSX. XLSX остаются historical fixture-источником.
+- Legacy live parser сохраняет режимы raw-only, norm-only, both; raw только на ПК, не VDS. Удалённую legacy SQLite наполняет только ingest API, не запись по сети.
+- Исходные большие материалы вне Git: исторический архив XLSX 2025, видеоматериалы и локальные SQLite.
+- Старые БД, включая повреждённые и smoke-файлы, не являются мусором. Не удалять их.
+- Старые users/password_text и runtime/auth/ingest не являются публичным исследовательским набором. Не копировать и не выводить их значения.
+- `docs/tz.md`, `facts.md`, `parser-plan.md`, `live-parser-spec.md`, `vvuzz-public-runbook.md` фиксируют исторические требования и наблюдения. Команды оттуда не дают разрешения на live mutation.
