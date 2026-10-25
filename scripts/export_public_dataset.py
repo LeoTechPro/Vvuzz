@@ -56,6 +56,8 @@ def export(source, output):
     source_hash = digest(source)
     output.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(output, uri=True)) as target:
+        # Full integrity checks touch indexes repeatedly; bound cache at 128 MiB.
+        target.execute("PRAGMA cache_size=-131072")
         target.execute("PRAGMA journal_mode=DELETE")
         target.execute("PRAGMA synchronous=NORMAL")
         target.execute("ATTACH DATABASE ? AS src", (source.resolve().as_uri() + "?mode=ro&immutable=1",))
