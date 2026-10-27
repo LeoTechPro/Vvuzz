@@ -48,7 +48,7 @@ $('#close-history').onclick=()=>$('#history').close();
 $('#pause-button').onclick=async()=>{try{await api('/api/pause','POST',{paused:!state.paused});await refresh();}catch(error){notice(error.message);}};
 async function refresh(){state=await api('/api/state');$('#version').textContent=state.version;$('#pause-button').textContent=state.paused?'Продолжить':'Пауза';$('#monitor-status').textContent=state.paused?'Наблюдение на паузе. Сохранённые данные доступны.':state.source_cooldown?`Источник попросил подождать. Все запросы отложены до ${date(state.source_cooldown)}.`:'Один ID может участвовать в нескольких конкурсах.';$('#archive-status').textContent=state.archive_error||(state.archive?`Подключён: ${state.archive}`:'Архив не подключён. Наблюдение за новыми списками доступно без него.');renderWatches();}
 let uninstallRunning=false;
-function showUninstall(){if(!$('#uninstall').open)$('#uninstall').showModal();}
+function showUninstall(){if(!$('#uninstall').open){$('#uninstall-form input[value="keep"]').checked=true;$('#uninstall').showModal();}}
 $('#uninstall-button').onclick=showUninstall;
 function closeUninstall(){ $('#uninstall').close();if(location.hash==='#uninstall')history.replaceState(null,'',location.pathname); }
 $('#cancel-uninstall').onclick=closeUninstall;$('#close-uninstall').onclick=closeUninstall;
