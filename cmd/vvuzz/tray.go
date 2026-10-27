@@ -29,10 +29,13 @@ func runTray(ctx context.Context, stop context.CancelFunc, address string, e *mo
 		}
 		systray.SetTitle("Vvuzz")
 		systray.SetTooltip("Vvuzz: локальное наблюдение за поступлением")
+		installTrayDoubleClick(func() { openBrowser(address) })
 		open := systray.AddMenuItem("Открыть Vvuzz", "Открыть локальный интерфейс")
 		pause := systray.AddMenuItemCheckbox("Приостановить наблюдение", "Сохраняет списки и историю", e.Paused())
 		systray.AddSeparator()
 		quit := systray.AddMenuItem("Завершить Vvuzz", "Остановить процесс наблюдения")
+		systray.AddSeparator()
+		uninstall := systray.AddMenuItem("Удалить Vvuzz…", "Выбрать, сохранить ли данные, и подтвердить удаление")
 		go func() {
 			ticker := time.NewTicker(10 * time.Second)
 			defer ticker.Stop()
@@ -42,17 +45,9 @@ func runTray(ctx context.Context, stop context.CancelFunc, address string, e *mo
 					systray.Quit()
 					return
 				case <-open.ClickedCh:
-					var command *exec.Cmd
-					if runtime.GOOS == "windows" {
-						command = exec.Command("rundll32", "url.dll,FileProtocolHandler", address)
-					} else {
-						command = exec.Command("xdg-open", address)
-					}
-					if err := command.Start(); err != nil {
-						log.Print("cannot open browser: ", err)
-					} else {
-						go command.Wait()
-					}
+					openBrowser(address)
+				case <-uninstall.ClickedCh:
+					openBrowser(address + "#uninstall")
 				case <-pause.ClickedCh:
 					if err := e.SetPaused(!e.Paused()); err != nil {
 						log.Print(err)
@@ -73,4 +68,18 @@ func runTray(ctx context.Context, stop context.CancelFunc, address string, e *mo
 			}
 		}()
 	}, func() { stop() })
+}
+
+func openBrowser(address string) {
+	var command *exec.Cmd
+	if runtime.GOOS == "windows" {
+		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", address)
+	} else {
+		command = exec.Command("xdg-open", address)
+	}
+	if err := command.Start(); err != nil {
+		log.Print("cannot open browser: ", err)
+	} else {
+		go command.Wait()
+	}
 }

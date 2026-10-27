@@ -117,7 +117,7 @@ func TestArchiveReadOnlyAndBrowserBoundary(t *testing.T) {
 	if string(before) != string(after) {
 		t.Fatal("archive bytes changed")
 	}
-	handler := e.Handler("127.0.0.1:9177")
+	handler := e.Handler("127.0.0.1:9177", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusAccepted) }))
 	for _, tc := range []struct {
 		host, origin, local string
 		want                int

@@ -28,7 +28,26 @@ func main() {
 	port := flag.Int("port", 9177, "loopback port")
 	noTray := flag.Bool("no-tray", false, "run without a desktop tray")
 	showVersion := flag.Bool("version", false, "print version")
+	removeData := flag.Bool("remove-local-data", false, "remove only Vvuzz state after the application has stopped")
+	checkUnlocked := flag.Bool("check-data-unlocked", false, "check that Vvuzz is stopped before uninstalling")
 	flag.Parse()
+	if *checkUnlocked {
+		if _, err := os.Stat(*data); os.IsNotExist(err) {
+			return
+		}
+		unlock, err := lockData(*data)
+		if err != nil {
+			log.Fatal(err)
+		}
+		unlock()
+		return
+	}
+	if *removeData {
+		if err := removeLocalData(*data); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if *showVersion {
 		fmt.Println(version)
 		return
@@ -39,11 +58,19 @@ func main() {
 	if err := os.MkdirAll(*data, 0700); err != nil {
 		log.Fatal(err)
 	}
+	unlock, err := lockData(*data)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 	engine, err := monitor.Open(*data, *archive)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer engine.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", *port))
@@ -51,7 +78,8 @@ func main() {
 		log.Fatalf("Vvuzz cannot open port (another instance may be running): %v", err)
 	}
 	address := "http://" + listener.Addr().String()
-	server := &http.Server{Handler: engine.Handler(listener.Addr().String()), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	uninstall := &uninstaller{data: *data, stop: stop}
+	server := &http.Server{Handler: engine.Handler(listener.Addr().String(), uninstall), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); engine.Run(ctx) }()
 	go func() {
@@ -71,4 +99,12 @@ func main() {
 	defer cancel()
 	_ = server.Shutdown(shutdown)
 	<-workerDone
+	engine.Close()
+	unlock()
+	unlock = nil
+	if uninstall.removeData.Load() {
+		if err := removeLocalData(*data); err != nil {
+			log.Print("cannot remove local data: ", err)
+		}
+	}
 }

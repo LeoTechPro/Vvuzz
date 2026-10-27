@@ -14,7 +14,7 @@ function busy(form,value) { form.querySelectorAll('button').forEach(button=>butt
 function showWatchForm(show=true) { $('#watch-form').hidden=!show;$('#add-button').setAttribute('aria-expanded',String(show));if(show)$('#watch-form input').focus(); }
 $('#add-button').onclick=()=>showWatchForm($('#watch-form').hidden);
 $('#empty-add').onclick=()=>showWatchForm();$('#cancel-watch').onclick=()=>showWatchForm(false);
-$('#settings-button').onclick=()=>{const open=$('#settings').hidden;$('#settings').hidden=!open;$('#settings-button').setAttribute('aria-expanded',String(open));if(open)$('#archive-path').focus();};
+$('#settings-button').onclick=()=>{const open=$('#settings').hidden;$('#settings').hidden=!open;$('#uninstall-settings').hidden=!open;$('#settings-button').setAttribute('aria-expanded',String(open));if(open)$('#archive-path').focus();};
 document.querySelectorAll('[data-tab]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-tab]').forEach(b=>{b.classList.toggle('active',b===button);if(b===button)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});$('#monitor-view').hidden=button.dataset.tab!=='monitor';$('#archive-view').hidden=button.dataset.tab!=='archive';notice('');});
 $('#archive-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget;busy(form,true);try{await api('/api/archive','POST',{path:$('#archive-path').value});await refresh();notice('Архив подключён. Теперь можно искать по ID.');}catch(error){notice(error.message);}finally{busy(form,false);}};
 $('#watch-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget;busy(form,true);const data=new FormData(form);try{await api('/api/watches','POST',{applicant_id:data.get('applicant_id'),url:data.get('url'),title:data.get('title'),seats:Number(data.get('seats')),rules_reviewed:data.has('rules_reviewed')});form.reset();showWatchForm(false);notice('Список добавлен. Первый запрос появится автоматически.');await refresh();}catch(error){notice(error.message);}finally{busy(form,false);}};
@@ -47,5 +47,19 @@ async function showHistory(watch){try{const rows=await api(`/api/history/${watch
 $('#close-history').onclick=()=>$('#history').close();
 $('#pause-button').onclick=async()=>{try{await api('/api/pause','POST',{paused:!state.paused});await refresh();}catch(error){notice(error.message);}};
 async function refresh(){state=await api('/api/state');$('#version').textContent=state.version;$('#pause-button').textContent=state.paused?'Продолжить':'Пауза';$('#monitor-status').textContent=state.paused?'Наблюдение на паузе. Сохранённые данные доступны.':state.source_cooldown?`Источник попросил подождать. Все запросы отложены до ${date(state.source_cooldown)}.`:'Один ID может участвовать в нескольких конкурсах.';$('#archive-status').textContent=state.archive_error||(state.archive?`Подключён: ${state.archive}`:'Архив не подключён. Наблюдение за новыми списками доступно без него.');renderWatches();}
+let uninstallRunning=false;
+function showUninstall(){if(!$('#uninstall').open)$('#uninstall').showModal();}
+$('#uninstall-button').onclick=showUninstall;
+function closeUninstall(){ $('#uninstall').close();if(location.hash==='#uninstall')history.replaceState(null,'',location.pathname); }
+$('#cancel-uninstall').onclick=closeUninstall;$('#close-uninstall').onclick=closeUninstall;
+$('#uninstall').addEventListener('cancel',()=>{if(location.hash==='#uninstall')history.replaceState(null,'',location.pathname);});
+window.addEventListener('hashchange',()=>{if(location.hash==='#uninstall')showUninstall();});
+if(location.hash==='#uninstall')showUninstall();
+$('#uninstall-form').onsubmit=async event=>{
+ event.preventDefault();const form=event.currentTarget;busy(form,true);$('#uninstall-error').hidden=true;
+ try{await api('/api/uninstall','POST',{confirmed:true,mode:new FormData(form).get('mode')});uninstallRunning=true;form.hidden=true;$('#uninstall-started').hidden=false;
+ const poll=setInterval(async()=>{try{const result=await api('/api/uninstall');if(result.status==='failed'){clearInterval(poll);uninstallRunning=false;form.hidden=false;$('#uninstall-started').hidden=true;$('#uninstall-error').textContent=result.error;$('#uninstall-error').hidden=false;busy(form,false);}}catch{clearInterval(poll);$('#uninstall-progress').textContent='Vvuzz остановлен. Завершите удаление в системном окне.';}},2000);
+ }catch(error){$('#uninstall-error').textContent=error.message;$('#uninstall-error').hidden=false;busy(form,false);}
+};
 refresh().catch(error=>notice(error.message));
-setInterval(()=>{if(!document.hidden&&!$('#history').open)refresh().catch(()=>notice('Нет связи с Vvuzz. Проверьте, работает ли приложение в трее.'));},15000);
+setInterval(()=>{if(!uninstallRunning&&!document.hidden&&!$('#history').open&&!$('#uninstall').open)refresh().catch(()=>notice('Нет связи с Vvuzz. Проверьте, работает ли приложение в трее.'));},15000);

@@ -38,6 +38,23 @@ jobs:
             if ($state.version -ne '0.0.1') { throw 'Installed runtime did not respond' }
             if (-not (Test-Path "$installPath/licenses/Go/LICENSE")) { throw 'License bundle missing' }
           } finally { Stop-Process -Id $app.Id -ErrorAction SilentlyContinue }
+      - name: Verify uninstall preserves archives and honors the data choice
+        shell: pwsh
+        run: |
+          foreach ($mode in @('keep', 'delete')) {
+            $installPath = Join-Path $env:RUNNER_TEMP "vvuzz-uninstall-$mode"
+            $dataPath = Join-Path $env:RUNNER_TEMP "vvuzz-data-$mode"
+            $setup = Start-Process -WindowStyle Hidden -FilePath ./dist/vvuzz-0.0.1-windows-amd64-setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$installPath" -Wait -PassThru
+            if ($setup.ExitCode -ne 0) { throw 'Installer failed' }
+            New-Item -ItemType Directory -Path $dataPath | Out-Null
+            Set-Content -LiteralPath "$dataPath/monitor.sqlite" -Value 'synthetic state'
+            Set-Content -LiteralPath "$dataPath/archive.sqlite" -Value 'synthetic archive'
+            $uninstall = Start-Process -WindowStyle Hidden -FilePath "$installPath/unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/VVUZZMODE=$mode","/VVUZZDATA=$dataPath" -Wait -PassThru
+            if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed: $mode ($($uninstall.ExitCode))" }
+            if (Test-Path "$installPath/vvuzz.exe") { throw 'Executable remained after uninstall' }
+            if (-not (Test-Path "$dataPath/archive.sqlite")) { throw 'Archive was removed' }
+            if ((Test-Path "$dataPath/monitor.sqlite") -ne ($mode -eq 'keep')) { throw "Incorrect data mode: $mode" }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: windows-amd64

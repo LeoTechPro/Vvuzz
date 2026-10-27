@@ -13,8 +13,12 @@ import (
 //go:embed ui/*
 var assets embed.FS
 
-func (e *Engine) Handler(host string) http.Handler {
+func (e *Engine) Handler(host string, uninstall http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	if uninstall != nil {
+		mux.Handle("GET /api/uninstall", uninstall)
+		mux.Handle("POST /api/uninstall", uninstall)
+	}
 	jsonOut := func(w http.ResponseWriter, value any) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(value)
